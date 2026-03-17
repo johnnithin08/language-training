@@ -99,6 +99,16 @@ export default function SetupScreen() {
         <Text style={styles.helper}>
           We'll send a verification code to your email
         </Text>
+
+        <Pressable
+          onPress={() => router.push('/(auth)/login')}
+          style={styles.ctaLink}
+          hitSlop={8}
+        >
+          <Text style={styles.ctaText}>
+            Already have an account? <Text style={styles.ctaHighlight}>Sign in</Text>
+          </Text>
+        </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -158,5 +168,17 @@ const styles = StyleSheet.create({
     color: app.textMuted,
     textAlign: 'center',
     marginTop: 16,
+  },
+  ctaLink: {
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  ctaText: {
+    fontSize: 15,
+    color: app.textMuted,
+  },
+  ctaHighlight: {
+    color: app.buttonPrimary,
+    fontWeight: '600',
   },
 });

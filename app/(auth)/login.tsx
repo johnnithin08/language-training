@@ -25,6 +25,16 @@ export default function LoginScreen() {
       >
         <Text style={styles.buttonText}>Sign in</Text>
       </Pressable>
+
+      <Pressable
+        onPress={() => router.push('/(auth)/setup')}
+        style={styles.ctaLink}
+        hitSlop={8}
+      >
+        <Text style={styles.ctaText}>
+          Don't have an account? <Text style={styles.ctaHighlight}>Sign up</Text>
+        </Text>
+      </Pressable>
     </View>
   );
 }
@@ -59,5 +69,17 @@ const styles = StyleSheet.create({
     color: white,
     fontSize: 17,
     fontWeight: '700',
+  },
+  ctaLink: {
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  ctaText: {
+    fontSize: 15,
+    color: app.textMuted,
+  },
+  ctaHighlight: {
+    color: app.buttonPrimary,
+    fontWeight: '600',
   },
 });
