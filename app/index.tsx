@@ -1,5 +1,11 @@
-import { View } from 'react-native';
+import { Redirect } from 'expo-router';
+import { useAuth } from '@/contexts/auth';
 
-export default function Screen() {
-  return <View style={{ flex: 1 }} />;
+export default function Index() {
+  const { isAuthenticated } = useAuth();
+
+  if (isAuthenticated) {
+    return <Redirect href="/(app)" />;
+  }
+  return <Redirect href="/(auth)/landing" />;
 }
