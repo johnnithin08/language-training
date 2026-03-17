@@ -1,0 +1,20 @@
+{
+  "staging": {
+    "awscloudformation": {
+      "AuthRoleName": "amplify-languagetraining-staging-cefbd-authRole",
+      "UnauthRoleArn": "arn:aws:iam::407465214555:role/amplify-languagetraining-staging-cefbd-unauthRole",
+      "AuthRoleArn": "arn:aws:iam::407465214555:role/amplify-languagetraining-staging-cefbd-authRole",
+      "Region": "eu-west-2",
+      "DeploymentBucketName": "amplify-languagetraining-staging-cefbd-deployment",
+      "UnauthRoleName": "amplify-languagetraining-staging-cefbd-unauthRole",
+      "StackName": "amplify-languagetraining-staging-cefbd",
+      "StackId": "arn:aws:cloudformation:eu-west-2:407465214555:stack/amplify-languagetraining-staging-cefbd/31afcde0-224c-11f1-98d1-06ba85b91dc3",
+      "AmplifyAppId": "d1js4wmpev551e"
+    },
+    "categories": {
+      "auth": {
+        "languagetraining": {}
+      }
+    }
+  }
+}

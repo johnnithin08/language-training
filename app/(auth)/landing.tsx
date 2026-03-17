@@ -2,15 +2,17 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { app, white } from '@/constants/colors';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { app, white, colors } from '@/constants/colors';
 
 export default function LandingScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   return (
     <LinearGradient
       colors={[...app.backgroundGradient]}
-      style={styles.container}
+      style={[styles.container, { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 48 }]}
     >
       <View style={styles.content}>
         <LinearGradient
@@ -28,10 +30,17 @@ export default function LandingScreen() {
         </Text>
 
         <Pressable
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+          style={({ pressed }) => [styles.buttonPrimary, pressed && styles.buttonPressed]}
+          onPress={() => router.push('/(auth)/login')}
+        >
+          <Text style={styles.buttonText}>Sign In</Text>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [styles.buttonSecondary, pressed && styles.buttonPressed]}
           onPress={() => router.push('/(auth)/setup')}
         >
-          <Text style={styles.buttonText}>Get Started</Text>
+          <Text style={styles.buttonText}>Create Account</Text>
         </Pressable>
       </View>
 
@@ -44,7 +53,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: 'space-between',
-    paddingVertical: 48,
   },
   content: {
     flex: 1,
@@ -77,18 +85,24 @@ const styles = StyleSheet.create({
   },
   tagline: {
     fontSize: 16,
-    color: app.textPrimary,
+    color: app.textMuted,
     textAlign: 'center',
     marginBottom: 40,
-    opacity: 0.95,
     lineHeight: 22,
   },
-  button: {
+  buttonPrimary: {
     backgroundColor: app.buttonPrimary,
     paddingVertical: 16,
-    paddingHorizontal: 48,
     borderRadius: 14,
-    minWidth: 200,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  buttonSecondary: {
+    backgroundColor: colors.slate[700],
+    paddingVertical: 16,
+    borderRadius: 14,
+    width: '100%',
     alignItems: 'center',
   },
   buttonPressed: {
