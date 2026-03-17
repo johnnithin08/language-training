@@ -8,28 +8,46 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { confirmSignUp, resendSignUpCode } from 'aws-amplify/auth';
 import { app, white, colors } from '@/constants/colors';
 
 const OTP_LENGTH = 6;
 const ACCENT_GREEN = colors.emerald[400];
 
+function getAuthErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'message' in err) {
+    const message = (err as { message?: string }).message ?? '';
+    if (message.includes('CodeMismatch') || message.includes('Invalid verification code'))
+      return 'Invalid or expired code. Please try again or resend.';
+    if (message.includes('Expired') || message.includes('expired'))
+      return 'Code expired. Please request a new one.';
+  }
+  return 'Something went wrong. Please try again.';
+}
+
 export default function OtpScreen() {
   const router = useRouter();
+  const { email: paramEmail } = useLocalSearchParams<{ email?: string }>();
   const insets = useSafeAreaInsets();
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const inputRefs = useRef<(TextInput | null)[]>([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
 
-  const email = 'user@example.com'; // TODO: pass from setup via params/context
+  const email = paramEmail ?? '';
 
   const handleOtpChange = (value: string, index: number) => {
     const digit = value.replace(/\D/g, '').slice(-1);
     const next = [...otp];
     next[index] = digit;
     setOtp(next);
+    setError('');
     if (digit && index < OTP_LENGTH - 1) {
       inputRefs.current[index + 1]?.focus();
     }
@@ -41,12 +59,45 @@ export default function OtpScreen() {
     }
   };
 
-  const handleVerify = () => {
-    router.push('/(auth)/login');
+  const handleVerify = async () => {
+    if (!email) {
+      setError('Email is missing. Please go back and sign up again.');
+      return;
+    }
+    const code = otp.join('');
+    if (code.length !== OTP_LENGTH) {
+      setError('Please enter the 6-digit code.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      await confirmSignUp({
+        username: email,
+        confirmationCode: code,
+      });
+      router.replace('/(auth)/login');
+    } catch (err) {
+      setError(getAuthErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleResendOtp = () => {
-    // TODO: resend OTP logic
+  const handleResendOtp = async () => {
+    if (!email) return;
+    setError('');
+    setResendLoading(true);
+    try {
+      await resendSignUpCode({ username: email });
+      setOtp(Array(OTP_LENGTH).fill(''));
+      setError('');
+      // Optional: show success toast
+    } catch (err) {
+      setError(getAuthErrorMessage(err));
+    } finally {
+      setResendLoading(false);
+    }
   };
 
   return (
@@ -86,7 +137,7 @@ export default function OtpScreen() {
         <Text style={styles.title}>Verify Your Email</Text>
         <Text style={styles.subtitle}>
           We sent a 6-digit code to{' '}
-          <Text style={styles.emailHighlight}>{email}</Text>
+          <Text style={styles.emailHighlight}>{email || 'your email'}</Text>
         </Text>
 
         <Text style={styles.otpLabel}>Enter OTP Code</Text>
@@ -102,20 +153,38 @@ export default function OtpScreen() {
               keyboardType="number-pad"
               maxLength={1}
               selectTextOnFocus
+              editable={!loading}
             />
           ))}
         </View>
 
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
         <Text style={styles.resendPrompt}>Didn't receive the code?</Text>
-        <Pressable onPress={handleResendOtp} hitSlop={8}>
-          <Text style={styles.resendLink}>Resend OTP</Text>
+        <Pressable
+          onPress={handleResendOtp}
+          hitSlop={8}
+          disabled={resendLoading}
+        >
+          <Text style={[styles.resendLink, resendLoading && styles.resendLinkDisabled]}>
+            {resendLoading ? 'Sending…' : 'Resend OTP'}
+          </Text>
         </Pressable>
 
         <Pressable
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+          style={({ pressed }) => [
+            styles.button,
+            pressed && styles.buttonPressed,
+            loading && styles.buttonDisabled,
+          ]}
           onPress={handleVerify}
+          disabled={loading}
         >
-          <Text style={styles.buttonText}>Verify & Continue</Text>
+          {loading ? (
+            <ActivityIndicator color={white} />
+          ) : (
+            <Text style={styles.buttonText}>Verify & Continue</Text>
+          )}
         </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -196,6 +265,12 @@ const styles = StyleSheet.create({
     color: white,
     textAlign: 'center',
   },
+  errorText: {
+    fontSize: 14,
+    color: colors.red[400],
+    marginBottom: 16,
+    textAlign: 'center',
+  },
   resendPrompt: {
     fontSize: 14,
     color: colors.slate[400],
@@ -207,6 +282,9 @@ const styles = StyleSheet.create({
     color: ACCENT_GREEN,
     marginBottom: 32,
   },
+  resendLinkDisabled: {
+    opacity: 0.6,
+  },
   button: {
     backgroundColor: app.buttonPrimary,
     paddingVertical: 16,
@@ -215,6 +293,9 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.9,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
   buttonText: {
     color: white,

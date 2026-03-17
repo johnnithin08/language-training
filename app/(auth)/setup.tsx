@@ -8,10 +8,26 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { signUp } from 'aws-amplify/auth';
 import { app, white, colors } from '@/constants/colors';
+
+function getAuthErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'name' in err) {
+    const name = (err as { name: string }).name;
+    const message = (err as { message?: string }).message ?? '';
+    if (name === 'UsernameExistsException' || message.includes('already exists'))
+      return 'An account with this email already exists. Sign in instead.';
+    if (name === 'InvalidPasswordException' || message.includes('password'))
+      return 'Password must be at least 8 characters with upper, lower, number, and symbol.';
+    if (name === 'InvalidParameterException')
+      return 'Please check your name and email.';
+  }
+  return 'Something went wrong. Please try again.';
+}
 
 export default function SetupScreen() {
   const router = useRouter();
@@ -20,9 +36,46 @@ export default function SetupScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSendOtp = () => {
-    router.push('/(auth)/otp');
+  const handleSendOtp = async () => {
+    setError('');
+    const trimmedName = fullName.trim();
+    const trimmedEmail = email.trim();
+    if (!trimmedName || !trimmedEmail || !password || !confirmPassword) {
+      setError('Please fill in all fields.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await signUp({
+        username: trimmedEmail,
+        password,
+        options: {
+          userAttributes: {
+            email: trimmedEmail,
+            name: trimmedName,
+          },
+        },
+      });
+      router.push({
+        pathname: '/(auth)/otp',
+        params: { email: trimmedEmail },
+      });
+    } catch (err) {
+      setError(getAuthErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -54,7 +107,7 @@ export default function SetupScreen() {
           placeholder="John Doe"
           placeholderTextColor={colors.slate[400]}
           value={fullName}
-          onChangeText={setFullName}
+          onChangeText={(t) => { setFullName(t); setError(''); }}
           autoCapitalize="words"
         />
 
@@ -64,7 +117,7 @@ export default function SetupScreen() {
           placeholder="you@example.com"
           placeholderTextColor={colors.slate[400]}
           value={email}
-          onChangeText={setEmail}
+          onChangeText={(t) => { setEmail(t); setError(''); }}
           keyboardType="email-address"
           autoCapitalize="none"
         />
@@ -75,7 +128,7 @@ export default function SetupScreen() {
           placeholder="••••••••"
           placeholderTextColor={colors.slate[400]}
           value={password}
-          onChangeText={setPassword}
+          onChangeText={(t) => { setPassword(t); setError(''); }}
           secureTextEntry
         />
 
@@ -85,15 +138,26 @@ export default function SetupScreen() {
           placeholder="••••••••"
           placeholderTextColor={colors.slate[400]}
           value={confirmPassword}
-          onChangeText={setConfirmPassword}
+          onChangeText={(t) => { setConfirmPassword(t); setError(''); }}
           secureTextEntry
         />
 
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
         <Pressable
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+          style={({ pressed }) => [
+            styles.button,
+            pressed && styles.buttonPressed,
+            loading && styles.buttonDisabled,
+          ]}
           onPress={handleSendOtp}
+          disabled={loading}
         >
-          <Text style={styles.buttonText}>Send OTP</Text>
+          {loading ? (
+            <ActivityIndicator color={white} />
+          ) : (
+            <Text style={styles.buttonText}>Send OTP</Text>
+          )}
         </Pressable>
 
         <Text style={styles.helper}>
@@ -148,6 +212,11 @@ const styles = StyleSheet.create({
     color: white,
     marginBottom: 20,
   },
+  errorText: {
+    fontSize: 14,
+    color: colors.red[400],
+    marginBottom: 16,
+  },
   button: {
     backgroundColor: app.buttonPrimary,
     paddingVertical: 16,
@@ -157,6 +226,9 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.9,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
   buttonText: {
     color: white,
