@@ -2,15 +2,17 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { app, white } from '@/constants/colors';
 
 export default function LandingScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   return (
     <LinearGradient
       colors={[...app.backgroundGradient]}
-      style={styles.container}
+      style={[styles.container, { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 48 }]}
     >
       <View style={styles.content}>
         <LinearGradient
@@ -44,7 +46,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: 'space-between',
-    paddingVertical: 48,
   },
   content: {
     flex: 1,

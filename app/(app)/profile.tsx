@@ -1,11 +1,13 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/auth';
 import { app, white, colors } from '@/constants/colors';
 
 export default function ProfileScreen() {
   const { signOut } = useAuth();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const handleSignOut = () => {
     signOut();
@@ -13,7 +15,7 @@ export default function ProfileScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24, paddingLeft: insets.left + 24, paddingRight: insets.right + 24 }]}>
       <Text style={styles.title}>Profile</Text>
       <Text style={styles.subtitle}>Manage your account and preferences.</Text>
 
@@ -31,8 +33,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.slate[900],
-    padding: 24,
-    paddingTop: 60,
   },
   title: {
     fontSize: 28,

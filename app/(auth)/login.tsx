@@ -1,10 +1,12 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/contexts/auth';
 import { app, white, colors } from '@/constants/colors';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { signIn } = useAuth();
 
   const handleLogin = () => {
@@ -13,7 +15,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24, paddingLeft: insets.left + 24, paddingRight: insets.right + 24 }]}>
       <Text style={styles.title}>Login</Text>
       <Text style={styles.subtitle}>You’re all set. Sign in to continue.</Text>
 
@@ -31,7 +33,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.slate[900],
-    padding: 24,
     justifyContent: 'center',
   },
   title: {

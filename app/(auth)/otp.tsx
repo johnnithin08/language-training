@@ -1,12 +1,14 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { app, white, colors } from '@/constants/colors';
 
 export default function OtpScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24, paddingLeft: insets.left + 24, paddingRight: insets.right + 24 }]}>
       <Text style={styles.title}>Verify OTP</Text>
       <Text style={styles.subtitle}>Enter the code sent to your phone or email</Text>
 
@@ -24,7 +26,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.slate[900],
-    padding: 24,
     justifyContent: 'center',
   },
   title: {

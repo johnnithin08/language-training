@@ -1,9 +1,12 @@
 import { View, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { app, white, colors } from '@/constants/colors';
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24, paddingLeft: insets.left + 24, paddingRight: insets.right + 24 }]}>
       <Text style={styles.title}>Home</Text>
       <Text style={styles.subtitle}>Start a conversation to practice your language.</Text>
     </View>
@@ -14,8 +17,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.slate[900],
-    padding: 24,
-    paddingTop: 60,
   },
   title: {
     fontSize: 28,
