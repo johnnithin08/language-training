@@ -80,8 +80,8 @@ export default function LoginScreen() {
 				username: trimmedEmail,
 				password,
 			});
-			signIn();
-			router.replace("/(app)");
+			await signIn();
+			router.replace("/");
 		} catch (err) {
 			logAuthError(err);
 			setError(getAuthErrorMessage(err));

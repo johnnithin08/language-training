@@ -1,8 +1,16 @@
 import { Tabs } from 'expo-router';
+import { Redirect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { app, colors } from '@/constants/colors';
+import { useAuth } from '@/contexts/auth';
 
 export default function AppLayout() {
+  const { userData } = useAuth();
+
+  if (!userData?.onboardingCompleted) {
+    return <Redirect href="/onboarding" />;
+  }
+
   return (
     <Tabs
       screenOptions={{
