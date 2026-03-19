@@ -1,125 +1,258 @@
-import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
-import { app, colors, white } from '@/constants/colors';
+import { app, colors, white } from "@/constants/colors";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useVoice, VoiceMode } from "react-native-voicekit";
 
 export default function ListeningScreen() {
-  const router = useRouter();
-  const insets = useSafeAreaInsets();
+	const router = useRouter();
+	const { categoryId } = useLocalSearchParams<{ categoryId?: string }>();
+	const insets = useSafeAreaInsets();
+	const [errorMessage, setErrorMessage] = useState<string | null>(null);
+	const [hasCapturedResult, setHasCapturedResult] = useState(false);
+	const {
+		available,
+		listening,
+		transcript,
+		startListening,
+		stopListening,
+		resetTranscript,
+	} = useVoice({
+		locale: "en-US",
+		mode: VoiceMode.ContinuousAndStop,
+		silenceTimeoutMs: 2000,
+		enablePartialResults: false,
+	});
+	console.log(
+		"'available",
+		available,
+		"listening",
+		listening,
+		"transcript",
+		transcript,
+	);
 
-  return (
-    <View
-      style={[
-        styles.container,
-        {
-          paddingTop: insets.top + 12,
-          paddingBottom: insets.bottom + 16,
-          paddingLeft: insets.left + 20,
-          paddingRight: insets.right + 20,
-        },
-      ]}
-    >
-      <Pressable style={styles.closeButton} onPress={() => router.back()} hitSlop={10}>
-        <Ionicons name="close" size={24} color={white} />
-      </Pressable>
+	useEffect(() => {
+		let active = true;
+		const beginListening = async () => {
+			try {
+				if (!available) return;
+				console.log("enter");
+				setErrorMessage(null);
+				setHasCapturedResult(false);
+				resetTranscript();
+				await startListening();
+			} catch {
+				if (active) {
+					setErrorMessage(
+						"Could not start listening. Please try again.",
+					);
+				}
+			}
+		};
+		beginListening();
+		return () => {
+			active = false;
+			void stopListening();
+		};
+	}, [available]);
 
-      <View style={styles.content}>
-        <LinearGradient colors={[...app.iconGradient]} style={styles.micGradient}>
-          <Ionicons name="mic-outline" size={54} color={white} />
-        </LinearGradient>
+	useEffect(() => {
+		const restart = async () => {
+			if (!listening && transcript.trim().length > 0) {
+				setHasCapturedResult(true);
+				await startListening();
+			}
+		};
+		restart();
+	}, [listening, transcript]);
 
-        <Text style={styles.title}>Listening...</Text>
-        <Text style={styles.subtitle}>Tell the AI something</Text>
-        <Text style={styles.helper}>Speak naturally - No pressure</Text>
+	const statusTitle = useMemo(() => {
+		if (!available) return "Voice not available";
+		if (errorMessage) return "Listening failed";
+		if (hasCapturedResult) return "Captured";
+		return listening ? "Listening..." : "Waiting...";
+	}, [available, errorMessage, hasCapturedResult, listening]);
 
-        <View style={styles.waveWrap}>
-          <View style={[styles.waveBar, { height: 18 }]} />
-          <View style={[styles.waveBar, { height: 26 }]} />
-          <View style={[styles.waveBar, { height: 14 }]} />
-          <View style={[styles.waveBar, { height: 34 }]} />
-          <View style={[styles.waveBar, { height: 22 }]} />
-        </View>
-      </View>
+	const statusSubtitle = useMemo(() => {
+		if (!available)
+			return "Speech recognition is not available on this device";
+		if (errorMessage) return errorMessage;
+		if (hasCapturedResult) return "Here is what you said";
+		return "Tell the AI something";
+	}, [available, errorMessage, hasCapturedResult]);
 
-      <Pressable
-        style={({ pressed }) => [styles.skipButton, pressed && styles.skipButtonPressed]}
-        onPress={() => router.replace('/(app)')}
-      >
-        <Text style={styles.skipButtonText}>End Session</Text>
-      </Pressable>
-    </View>
-  );
+	const helperText = useMemo(() => {
+		if (hasCapturedResult)
+			return "Auto-stopped after you finished speaking";
+		return "Speak naturally - No pressure";
+	}, [hasCapturedResult]);
+
+	return (
+		<View
+			style={[
+				styles.container,
+				{
+					paddingTop: insets.top + 12,
+					paddingBottom: insets.bottom + 16,
+					paddingLeft: insets.left + 20,
+					paddingRight: insets.right + 20,
+				},
+			]}
+		>
+			<Pressable
+				style={styles.closeButton}
+				onPress={() => router.back()}
+				hitSlop={10}
+			>
+				<Ionicons name="close" size={24} color={white} />
+			</Pressable>
+
+			<View style={styles.content}>
+				<LinearGradient
+					colors={[...app.iconGradient]}
+					style={styles.micGradient}
+				>
+					<Ionicons name="mic-outline" size={54} color={white} />
+				</LinearGradient>
+
+				<Text style={styles.title}>{statusTitle}</Text>
+				<Text style={styles.subtitle}>{statusSubtitle}</Text>
+				<Text style={styles.helper}>{helperText}</Text>
+				{categoryId ? (
+					<Text style={styles.category}>Category: {categoryId}</Text>
+				) : null}
+				<Text style={styles.transcriptLabel}>Transcript</Text>
+				<View style={styles.transcriptBox}>
+					<Text style={styles.transcriptText}>
+						{transcript.trim().length > 0
+							? transcript
+							: "Start speaking..."}
+					</Text>
+				</View>
+
+				<View style={styles.waveWrap}>
+					<View style={[styles.waveBar, { height: 18 }]} />
+					<View style={[styles.waveBar, { height: 26 }]} />
+					<View style={[styles.waveBar, { height: 14 }]} />
+					<View style={[styles.waveBar, { height: 34 }]} />
+					<View style={[styles.waveBar, { height: 22 }]} />
+				</View>
+			</View>
+
+			<Pressable
+				style={({ pressed }) => [
+					styles.skipButton,
+					pressed && styles.skipButtonPressed,
+				]}
+				onPress={() => router.replace("/(app)")}
+			>
+				<Text style={styles.skipButtonText}>End Session</Text>
+			</Pressable>
+		</View>
+	);
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.slate[950],
-  },
-  closeButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: colors.slate[800],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  content: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  micGradient: {
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 32,
-  },
-  title: {
-    color: white,
-    fontSize: 56,
-    lineHeight: 60,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  subtitle: {
-    color: white,
-    fontSize: 24,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  helper: {
-    color: app.textMuted,
-    fontSize: 16,
-    marginBottom: 28,
-  },
-  waveWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  waveBar: {
-    width: 8,
-    borderRadius: 8,
-    backgroundColor: app.buttonPrimary,
-  },
-  skipButton: {
-    backgroundColor: app.buttonPrimary,
-    borderRadius: 20,
-    minHeight: 72,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  skipButtonPressed: {
-    opacity: 0.9,
-  },
-  skipButtonText: {
-    color: white,
-    fontSize: 18,
-    fontWeight: '700',
-  },
+	container: {
+		flex: 1,
+		backgroundColor: colors.slate[950],
+	},
+	closeButton: {
+		width: 56,
+		height: 56,
+		borderRadius: 18,
+		backgroundColor: colors.slate[800],
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	content: {
+		flex: 1,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	micGradient: {
+		width: 180,
+		height: 180,
+		borderRadius: 90,
+		alignItems: "center",
+		justifyContent: "center",
+		marginBottom: 32,
+	},
+	title: {
+		color: white,
+		fontSize: 56,
+		lineHeight: 60,
+		fontWeight: "700",
+		marginBottom: 8,
+	},
+	subtitle: {
+		color: white,
+		fontSize: 22,
+		fontWeight: "600",
+		marginBottom: 6,
+		textAlign: "center",
+	},
+	helper: {
+		color: app.textMuted,
+		fontSize: 16,
+		marginBottom: 12,
+		textAlign: "center",
+	},
+	category: {
+		color: app.textMuted,
+		fontSize: 13,
+		marginBottom: 12,
+	},
+	transcriptLabel: {
+		color: app.textMuted,
+		fontSize: 13,
+		alignSelf: "flex-start",
+		marginBottom: 8,
+		width: "100%",
+	},
+	transcriptBox: {
+		width: "100%",
+		minHeight: 96,
+		borderRadius: 14,
+		backgroundColor: "#111934",
+		borderWidth: 1,
+		borderColor: "#2a3561",
+		paddingHorizontal: 14,
+		paddingVertical: 12,
+		marginBottom: 20,
+	},
+	transcriptText: {
+		color: white,
+		fontSize: 16,
+		lineHeight: 22,
+	},
+	waveWrap: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 10,
+	},
+	waveBar: {
+		width: 8,
+		borderRadius: 8,
+		backgroundColor: app.buttonPrimary,
+	},
+	skipButton: {
+		backgroundColor: app.buttonPrimary,
+		borderRadius: 20,
+		minHeight: 72,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	skipButtonPressed: {
+		opacity: 0.9,
+	},
+	skipButtonText: {
+		color: white,
+		fontSize: 18,
+		fontWeight: "700",
+	},
 });
