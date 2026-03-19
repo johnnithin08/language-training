@@ -38,6 +38,18 @@ export default function AppLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="conversations"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="listening"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }
