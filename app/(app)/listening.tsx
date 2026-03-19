@@ -2,6 +2,7 @@ import { app, colors, white } from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import * as Speech from "expo-speech";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -13,6 +14,7 @@ export default function ListeningScreen() {
 	const insets = useSafeAreaInsets();
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const [hasCapturedResult, setHasCapturedResult] = useState(false);
+	const [isSpeaking, setIsSpeaking] = useState(false);
 	const {
 		available,
 		listening,
@@ -26,21 +28,14 @@ export default function ListeningScreen() {
 		silenceTimeoutMs: 2000,
 		enablePartialResults: false,
 	});
-	console.log(
-		"'available",
-		available,
-		"listening",
-		listening,
-		"transcript",
-		transcript,
-	);
+
+	console.log("ava", available);
 
 	useEffect(() => {
 		let active = true;
 		const beginListening = async () => {
 			try {
 				if (!available) return;
-				console.log("enter");
 				setErrorMessage(null);
 				setHasCapturedResult(false);
 				resetTranscript();
@@ -57,6 +52,7 @@ export default function ListeningScreen() {
 		return () => {
 			active = false;
 			void stopListening();
+			void Speech.stop();
 		};
 	}, [available]);
 
@@ -64,7 +60,6 @@ export default function ListeningScreen() {
 		const restart = async () => {
 			if (!listening && transcript.trim().length > 0) {
 				setHasCapturedResult(true);
-				await startListening();
 			}
 		};
 		restart();
@@ -90,6 +85,28 @@ export default function ListeningScreen() {
 			return "Auto-stopped after you finished speaking";
 		return "Speak naturally - No pressure";
 	}, [hasCapturedResult]);
+
+	const transcriptText = transcript.trim();
+	const canSpeak = transcriptText.length > 0;
+
+	const handleSpeakTranscript = async () => {
+		if (!canSpeak || isSpeaking) return;
+		await Speech.stop();
+		setIsSpeaking(true);
+		Speech.speak(transcriptText, {
+			language: "en-US",
+			rate: 0.95,
+			pitch: 1.0,
+			onDone: () => {
+				resetTranscript();
+				setHasCapturedResult(false);
+				setIsSpeaking(false);
+				startListening();
+			},
+			onStopped: () => setIsSpeaking(false),
+			onError: () => setIsSpeaking(false),
+		});
+	};
 
 	return (
 		<View
@@ -128,11 +145,31 @@ export default function ListeningScreen() {
 				<Text style={styles.transcriptLabel}>Transcript</Text>
 				<View style={styles.transcriptBox}>
 					<Text style={styles.transcriptText}>
-						{transcript.trim().length > 0
+						{transcriptText.length > 0
 							? transcript
 							: "Start speaking..."}
 					</Text>
 				</View>
+
+				<Pressable
+					style={({ pressed }) => [
+						styles.speakButton,
+						pressed && styles.speakButtonPressed,
+						(!canSpeak || isSpeaking) && styles.speakButtonDisabled,
+					]}
+					onPress={() => void handleSpeakTranscript()}
+					disabled={!canSpeak || isSpeaking}
+				>
+					<Ionicons
+						name="volume-high"
+						size={22}
+						color={white}
+						style={styles.speakIcon}
+					/>
+					<Text style={styles.speakButtonText}>
+						{isSpeaking ? "Speaking…" : "Speak transcript"}
+					</Text>
+				</Pressable>
 
 				<View style={styles.waveWrap}>
 					<View style={[styles.waveBar, { height: 18 }]} />
@@ -229,6 +266,33 @@ const styles = StyleSheet.create({
 		color: white,
 		fontSize: 16,
 		lineHeight: 22,
+	},
+	speakButton: {
+		width: "100%",
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "center",
+		backgroundColor: colors.slate[700],
+		borderRadius: 16,
+		borderWidth: 1,
+		borderColor: colors.slate[600],
+		paddingVertical: 16,
+		paddingHorizontal: 20,
+		marginBottom: 20,
+	},
+	speakButtonPressed: {
+		opacity: 0.9,
+	},
+	speakButtonDisabled: {
+		opacity: 0.45,
+	},
+	speakIcon: {
+		marginRight: 10,
+	},
+	speakButtonText: {
+		color: white,
+		fontSize: 17,
+		fontWeight: "700",
 	},
 	waveWrap: {
 		flexDirection: "row",
