@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/auth';
 import { colors } from '@/constants/colors';
 
 export default function Index() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, userData } = useAuth();
 
   if (isLoading) {
     return (
@@ -14,6 +14,9 @@ export default function Index() {
     );
   }
   if (isAuthenticated) {
+    if (!userData?.onboardingCompleted) {
+      return <Redirect href="/onboarding" />;
+    }
     return <Redirect href="/(app)" />;
   }
   return <Redirect href="/(auth)/landing" />;
