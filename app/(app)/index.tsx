@@ -1,237 +1,344 @@
-import { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { fetchUserAttributes } from 'aws-amplify/auth';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { app, white, colors } from '@/constants/colors';
+import { app, colors, white } from "@/constants/colors";
+import {
+	getCategoryEmoji,
+	getCategoryTitle,
+} from "@/constants/conversationCategoryConfig";
+import {
+	formatSessionMeta,
+	listRecentSessions,
+	scoreToDisplayColor,
+	type SessionListItem,
+} from "@/services/session";
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import { fetchUserAttributes } from "aws-amplify/auth";
+import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
+import {
+	ActivityIndicator,
+	Pressable,
+	StyleSheet,
+	Text,
+	View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type SessionItem = {
-  id: string;
-  title: string;
-  meta: string;
-  score: string;
-  scoreColor: string;
-  emoji: string;
+type SessionRow = {
+	id: string;
+	title: string;
+	meta: string;
+	score: string;
+	scoreColor: string;
+	emoji: string;
 };
 
-const RECENT_SESSIONS: SessionItem[] = [
-  {
-    id: '1',
-    title: 'Restaurant Ordering',
-    meta: 'Yesterday • 8 min',
-    score: '7.2',
-    scoreColor: '#2dd4bf',
-    emoji: '🍽️',
-  },
-  {
-    id: '2',
-    title: 'Introductions',
-    meta: '2 days ago • 5 min',
-    score: '6.5',
-    scoreColor: app.buttonPrimary,
-    emoji: '👋',
-  },
-  {
-    id: '3',
-    title: 'Directions Practice',
-    meta: '3 days ago • 7 min',
-    score: '7.8',
-    scoreColor: '#2dd4bf',
-    emoji: '🧭',
-  },
-];
-
 export default function HomeScreen() {
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
-  const [name, setName] = useState('there');
+	const insets = useSafeAreaInsets();
+	const router = useRouter();
+	const [name, setName] = useState("");
+	const [sessions, setSessions] = useState<SessionRow[]>([]);
+	const [sessionsLoading, setSessionsLoading] = useState(true);
+	const [sessionsError, setSessionsError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let active = true;
-    const loadName = async () => {
-      try {
-        const attributes = await fetchUserAttributes();
-        const profileName = attributes.name?.trim();
-        if (active && profileName) {
-          setName(profileName);
-        }
-      } catch {
-        // keep fallback greeting
-      }
-    };
-    void loadName();
-    return () => {
-      active = false;
-    };
-  }, []);
+	const mapItemToRow = useCallback((item: SessionListItem): SessionRow => {
+		const overall = item.analysis?.scores.overall ?? 0;
+		return {
+			id: item.id,
+			title: getCategoryTitle(item.categoryId),
+			meta: formatSessionMeta(item.createdAt),
+			score: overall.toFixed(1),
+			scoreColor: scoreToDisplayColor(overall),
+			emoji: getCategoryEmoji(item.categoryId),
+		};
+	}, []);
 
-  const greeting = useMemo(() => `Welcome back ${name}`, [name]);
+	useFocusEffect(
+		useCallback(() => {
+			let active = true;
+			const load = async () => {
+				setSessionsLoading(true);
+				setSessionsError(null);
+				try {
+					const items = await listRecentSessions(50);
+					if (!active) return;
+					setSessions(items.slice(0, 5).map(mapItemToRow));
+				} catch (e) {
+					console.error("listRecentSessions", e);
+					if (active) {
+						setSessionsError(
+							e instanceof Error
+								? e.message
+								: "Could not load sessions.",
+						);
+						setSessions([]);
+					}
+				} finally {
+					if (active) setSessionsLoading(false);
+				}
+			};
+			void load();
+			return () => {
+				active = false;
+			};
+		}, [mapItemToRow]),
+	);
 
-  return (
-    <View
-      style={[
-        styles.container,
-        {
-          paddingTop: insets.top + 24,
-          paddingBottom: insets.bottom + 24,
-          paddingLeft: insets.left + 24,
-          paddingRight: insets.right + 24,
-        },
-      ]}
-    >
-      <Text style={styles.welcome}>{greeting}</Text>
-      <Text style={styles.title}>Ready to practice?</Text>
+	useFocusEffect(
+		useCallback(() => {
+			let active = true;
+			const loadName = async () => {
+				try {
+					const attributes = await fetchUserAttributes();
+					const profileName = attributes.name?.trim();
+					if (active && profileName) {
+						setName(profileName);
+					}
+				} catch {
+					// keep fallback greeting
+				}
+			};
+			void loadName();
+			return () => {
+				active = false;
+			};
+		}, []),
+	);
 
-      <Text style={styles.sectionLabel}>NEW CONVERSATION</Text>
-      <Pressable
-        style={({ pressed }) => [styles.newConversationCard, pressed && styles.cardPressed]}
-        onPress={() => router.push('/(app)/conversations')}
-      >
-        <LinearGradient colors={[...app.iconGradient]} style={styles.newConversationIconWrap}>
-          <View style={styles.newConversationIconInner}>
-            <Ionicons name="mic" size={24} color={app.iconOnLight} />
-          </View>
-        </LinearGradient>
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle}>New Conversation</Text>
-          <Text style={styles.cardMeta}>English practice • Choose a topic</Text>
-        </View>
-        <Text style={styles.chevron}>›</Text>
-      </Pressable>
+	const greeting = useMemo(() => `Welcome back ${name}`, [name]);
 
-      <Text style={styles.sectionLabel}>RECENT SESSIONS</Text>
-      <View style={styles.listWrap}>
-        {RECENT_SESSIONS.map((item) => (
-          <View key={item.id} style={styles.card}>
-            <View style={styles.iconWrap}>
-              <Text style={styles.iconText}>{item.emoji}</Text>
-            </View>
-            <View style={styles.cardBody}>
-              <Text style={styles.cardTitle}>{item.title}</Text>
-              <Text style={styles.cardMeta}>{item.meta}</Text>
-            </View>
-            <View style={styles.scoreWrap}>
-              <Text style={[styles.scoreValue, { color: item.scoreColor }]}>
-                {item.score}
-              </Text>
-              <Text style={styles.scoreLabel}>Score</Text>
-            </View>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
+	return (
+		<View
+			style={[
+				styles.container,
+				{
+					paddingTop: insets.top + 24,
+					paddingBottom: insets.bottom + 24,
+					paddingLeft: insets.left + 24,
+					paddingRight: insets.right + 24,
+				},
+			]}
+		>
+			<Text style={styles.welcome}>{greeting}</Text>
+			<Text style={styles.title}>Ready to practice?</Text>
+
+			<Text style={styles.sectionLabel}>NEW CONVERSATION</Text>
+			<Pressable
+				style={({ pressed }) => [
+					styles.newConversationCard,
+					pressed && styles.cardPressed,
+				]}
+				onPress={() => router.push("/(app)/conversations")}
+			>
+				<LinearGradient
+					colors={[...app.iconGradient]}
+					style={styles.newConversationIconWrap}
+				>
+					<View style={styles.newConversationIconInner}>
+						<Ionicons
+							name="mic"
+							size={24}
+							color={app.iconOnLight}
+						/>
+					</View>
+				</LinearGradient>
+				<View style={styles.cardBody}>
+					<Text style={styles.cardTitle}>New Conversation</Text>
+					<Text style={styles.cardMeta}>
+						English practice • Choose a topic
+					</Text>
+				</View>
+				<Text style={styles.chevron}>›</Text>
+			</Pressable>
+
+			<Text style={styles.sectionLabel}>RECENT SESSIONS</Text>
+			{sessionsLoading ? (
+				<View style={styles.sessionsLoading}>
+					<ActivityIndicator color={app.buttonPrimary} />
+					<Text style={styles.sessionsLoadingText}>
+						Loading sessions…
+					</Text>
+				</View>
+			) : sessionsError ? (
+				<Text style={styles.sessionsError}>{sessionsError}</Text>
+			) : sessions.length === 0 ? (
+				<Text style={styles.sessionsEmpty}>
+					No sessions yet. Finish a conversation to see your score
+					here.
+				</Text>
+			) : (
+				<View style={styles.listWrap}>
+					{sessions.map((item) => (
+						<Pressable
+							key={item.id}
+							style={({ pressed }) => [
+								styles.card,
+								pressed && styles.cardPressed,
+							]}
+							onPress={() =>
+								router.push({
+									pathname: "/(app)/session-analysis",
+									params: { sessionId: item.id },
+								})
+							}
+						>
+							<View style={styles.iconWrap}>
+								<Text style={styles.iconText}>
+									{item.emoji}
+								</Text>
+							</View>
+							<View style={styles.cardBody}>
+								<Text style={styles.cardTitle}>
+									{item.title}
+								</Text>
+								<Text style={styles.cardMeta}>{item.meta}</Text>
+							</View>
+							<View style={styles.scoreWrap}>
+								<Text
+									style={[
+										styles.scoreValue,
+										{ color: item.scoreColor },
+									]}
+								>
+									{item.score}
+								</Text>
+								<Text style={styles.scoreLabel}>Score</Text>
+							</View>
+						</Pressable>
+					))}
+				</View>
+			)}
+		</View>
+	);
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.slate[900],
-  },
-  welcome: {
-    fontSize: 18,
-    color: app.textMuted,
-    marginBottom: 4,
-  },
-  title: {
-    fontSize: 40,
-    fontWeight: '700',
-    color: white,
-    marginBottom: 28,
-  },
-  sectionLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: app.textMuted,
-    letterSpacing: 0.8,
-    marginBottom: 16,
-  },
-  listWrap: {
-    gap: 14,
-  },
-  card: {
-    backgroundColor: '#111934',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#2a3561',
-    paddingHorizontal: 14,
-    paddingVertical: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  newConversationCard: {
-    backgroundColor: '#111934',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#2a3561',
-    paddingHorizontal: 14,
-    paddingVertical: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  newConversationIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
-  newConversationIconInner: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardPressed: {
-    opacity: 0.9,
-  },
-  chevron: {
-    color: app.textMuted,
-    fontSize: 28,
-    lineHeight: 28,
-    marginLeft: 8,
-  },
-  iconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: '#17454f',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
-  iconText: {
-    fontSize: 20,
-  },
-  cardBody: {
-    flex: 1,
-  },
-  cardTitle: {
-    color: white,
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  cardMeta: {
-    color: app.textMuted,
-    fontSize: 14,
-  },
-  scoreWrap: {
-    alignItems: 'flex-end',
-  },
-  scoreValue: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  scoreLabel: {
-    color: app.textMuted,
-    fontSize: 14,
-  },
+	container: {
+		flex: 1,
+		backgroundColor: colors.slate[900],
+	},
+	welcome: {
+		fontSize: 18,
+		color: app.textMuted,
+		marginBottom: 4,
+	},
+	title: {
+		fontSize: 40,
+		fontWeight: "700",
+		color: white,
+		marginBottom: 28,
+	},
+	sectionLabel: {
+		fontSize: 14,
+		fontWeight: "700",
+		color: app.textMuted,
+		letterSpacing: 0.8,
+		marginBottom: 16,
+	},
+	listWrap: {
+		gap: 14,
+	},
+	sessionsLoading: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 12,
+		paddingVertical: 8,
+	},
+	sessionsLoadingText: {
+		color: app.textMuted,
+		fontSize: 15,
+	},
+	sessionsError: {
+		color: "#fca5a5",
+		fontSize: 15,
+		lineHeight: 22,
+	},
+	sessionsEmpty: {
+		color: app.textMuted,
+		fontSize: 15,
+		lineHeight: 22,
+	},
+	card: {
+		backgroundColor: "#111934",
+		borderRadius: 22,
+		borderWidth: 1,
+		borderColor: "#2a3561",
+		paddingHorizontal: 14,
+		paddingVertical: 16,
+		flexDirection: "row",
+		alignItems: "center",
+	},
+	newConversationCard: {
+		backgroundColor: "#111934",
+		borderRadius: 22,
+		borderWidth: 1,
+		borderColor: "#2a3561",
+		paddingHorizontal: 14,
+		paddingVertical: 16,
+		flexDirection: "row",
+		alignItems: "center",
+		marginBottom: 24,
+	},
+	newConversationIconWrap: {
+		width: 56,
+		height: 56,
+		borderRadius: 16,
+		alignItems: "center",
+		justifyContent: "center",
+		marginRight: 14,
+	},
+	newConversationIconInner: {
+		width: 34,
+		height: 34,
+		borderRadius: 17,
+		backgroundColor: white,
+		alignItems: "center",
+		justifyContent: "center",
+	},
+	cardPressed: {
+		opacity: 0.9,
+	},
+	chevron: {
+		color: app.textMuted,
+		fontSize: 28,
+		lineHeight: 28,
+		marginLeft: 8,
+	},
+	iconWrap: {
+		width: 48,
+		height: 48,
+		borderRadius: 14,
+		backgroundColor: "#17454f",
+		alignItems: "center",
+		justifyContent: "center",
+		marginRight: 14,
+	},
+	iconText: {
+		fontSize: 20,
+	},
+	cardBody: {
+		flex: 1,
+	},
+	cardTitle: {
+		color: white,
+		fontSize: 18,
+		fontWeight: "700",
+		marginBottom: 2,
+	},
+	cardMeta: {
+		color: app.textMuted,
+		fontSize: 14,
+	},
+	scoreWrap: {
+		alignItems: "flex-end",
+	},
+	scoreValue: {
+		fontSize: 28,
+		fontWeight: "700",
+		marginBottom: 2,
+	},
+	scoreLabel: {
+		color: app.textMuted,
+		fontSize: 14,
+	},
 });

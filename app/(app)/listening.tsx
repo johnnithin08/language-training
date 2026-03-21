@@ -8,12 +8,20 @@ import {
 	type AssistantMessage,
 	getAssistantReply,
 } from "@/services/assistant-reply";
+import { analyzeSession, saveSession } from "@/services/session";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Speech from "expo-speech";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+	ActivityIndicator,
+	Alert,
+	Pressable,
+	StyleSheet,
+	Text,
+	View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useVoice, VoiceMode } from "react-native-voicekit";
 
@@ -34,6 +42,7 @@ export default function ListeningScreen() {
 	const insets = useSafeAreaInsets();
 	const [error, setError] = useState<string | null>(null);
 	const [step, setStep] = useState<ListeningStep>("awaiting_voice");
+	const [isEndingSession, setIsEndingSession] = useState(false);
 
 	const lastSubmittedRef = useRef<string | null>(null);
 	const [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -196,14 +205,17 @@ export default function ListeningScreen() {
 	]);
 
 	const statusTitle = useMemo(() => {
+		if (isEndingSession) return "Saving session";
 		if (!available) return "Voice not available";
 		if (error && step === "listening") return "Something went wrong";
 		if (step === "opening" || step === "thinking") return "Thinking...";
 		if (step === "playing") return "One moment";
 		return listening ? "Listening..." : "Waiting...";
-	}, [available, error, step, listening]);
+	}, [available, error, step, listening, isEndingSession]);
 
 	const statusSubtitle = useMemo(() => {
+		if (isEndingSession)
+			return "Analyzing your English and saving this session";
 		if (!available)
 			return "Speech recognition is not available on this device";
 		if (error && step === "listening") return error;
@@ -211,13 +223,50 @@ export default function ListeningScreen() {
 		if (step === "thinking") return "Asking Claude on Amazon Bedrock";
 		if (step === "playing") return "Reply is playing";
 		return "Tell the AI something";
-	}, [available, error, step]);
+	}, [available, error, step, isEndingSession]);
 
 	const helperText = useMemo(() => {
+		if (isEndingSession) return "Almost done";
 		if (step === "opening" || step === "thinking") return "Hang tight";
 		if (step === "playing") return "Hang tight";
 		return "Speak naturally - No pressure";
-	}, [step]);
+	}, [step, isEndingSession]);
+
+	const handleEndSession = useCallback(async () => {
+		if (isEndingSession) return;
+		setIsEndingSession(true);
+		setError(null);
+		try {
+			await stopListening();
+			await Speech.stop();
+			const snapshot = messagesRef.current;
+			if (snapshot.length > 0) {
+				const analysis = await analyzeSession(snapshot);
+				const sessionId = await saveSession({
+					categoryId: categoryId ?? "free-talk",
+					targetLanguage: userData?.targetLanguage ?? "English",
+					analysis,
+				});
+				router.replace({
+					pathname: "/(app)/session-analysis",
+					params: { sessionId },
+				});
+				return;
+			}
+		} catch (e) {
+			console.error("End session failed", e);
+			const msg =
+				e instanceof Error ? e.message : "Could not save this session.";
+			Alert.alert("Session", msg);
+		}
+		router.replace("/(app)");
+	}, [
+		isEndingSession,
+		stopListening,
+		categoryId,
+		userData?.targetLanguage,
+		router,
+	]);
 
 	return (
 		<View
@@ -267,10 +316,16 @@ export default function ListeningScreen() {
 				style={({ pressed }) => [
 					styles.skipButton,
 					pressed && styles.skipButtonPressed,
+					isEndingSession && styles.skipButtonDisabled,
 				]}
-				onPress={() => router.replace("/(app)")}
+				onPress={() => void handleEndSession()}
+				disabled={isEndingSession}
 			>
-				<Text style={styles.skipButtonText}>End Session</Text>
+				{isEndingSession ? (
+					<ActivityIndicator color={white} />
+				) : (
+					<Text style={styles.skipButtonText}>End Session</Text>
+				)}
 			</Pressable>
 		</View>
 	);
@@ -346,6 +401,9 @@ const styles = StyleSheet.create({
 	},
 	skipButtonPressed: {
 		opacity: 0.9,
+	},
+	skipButtonDisabled: {
+		opacity: 0.75,
 	},
 	skipButtonText: {
 		color: white,

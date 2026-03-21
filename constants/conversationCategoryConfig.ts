@@ -110,3 +110,11 @@ export function getCategoryDisplayLabel(categoryId?: string | null): string {
 	const c = getCategoryById(categoryId) ?? byId.get("free-talk")!;
 	return `${c.emoji} ${c.title}`;
 }
+
+export function getCategoryEmoji(categoryId?: string | null): string {
+	return getCategoryById(categoryId)?.emoji ?? byId.get("free-talk")!.emoji;
+}
+
+export function getCategoryTitle(categoryId?: string | null): string {
+	return getCategoryById(categoryId)?.title ?? byId.get("free-talk")!.title;
+}

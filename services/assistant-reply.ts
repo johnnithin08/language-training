@@ -8,6 +8,8 @@ export type AssistantMessage = {
 export type AssistantReplyOptions = {
 	targetLanguage?: string;
 	categoryId?: string;
+	maxTokens?: number;
+	sessionAnalysisTurn?: boolean;
 };
 
 const client = generateClient();
@@ -17,11 +19,15 @@ const assistantReplyQuery = /* GraphQL */ `
 		$messages: [AssistantMessageInput!]!
 		$targetLanguage: String
 		$categoryId: String
+		$maxTokens: Int
+		$sessionAnalysisTurn: Boolean
 	) {
 		assistantReply(
 			messages: $messages
 			targetLanguage: $targetLanguage
 			categoryId: $categoryId
+			maxTokens: $maxTokens
+			sessionAnalysisTurn: $sessionAnalysisTurn
 		)
 	}
 `;
@@ -46,6 +52,8 @@ export async function getAssistantReply(
 			})),
 			targetLanguage: options.targetLanguage ?? null,
 			categoryId: options.categoryId ?? null,
+			maxTokens: options.maxTokens ?? null,
+			sessionAnalysisTurn: options.sessionAnalysisTurn ?? null,
 		},
 		authMode: "userPool",
 	});

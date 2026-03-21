@@ -35,26 +35,44 @@ exports.handler = async (event) => {
 	const rawMessages = args.messages;
 	const targetLanguage = args.targetLanguage;
 	const categoryId = args.categoryId;
+	const sessionAnalysisTurn = args.sessionAnalysisTurn === true;
+	const requestedMax =
+		typeof args.maxTokens === "number" && Number.isFinite(args.maxTokens)
+			? Math.floor(args.maxTokens)
+			: null;
 
 	// Keep in sync with SPEECH_OUTPUT_NOTE in constants/conversationCategoryConfig.ts
 	const SPEECH_OUTPUT_NOTE =
 		"Note: Replies are read aloud with Expo Speech. Use plain text only: letters, numbers, spaces, and basic punctuation (periods, commas, question marks, apostrophes in words). Do not use emojis, asterisks, markdown, bullet lists, quotation marks for formatting, angle brackets, or other special symbols.";
 
-	let system =
-		"You are a friendly language practice partner. Keep replies concise and natural for spoken aloud.";
-	if (targetLanguage) {
-		system = `You are a friendly language practice partner. The user is learning ${targetLanguage}. Respond helpfully and concisely, primarily in ${targetLanguage}; use brief English only if needed for clarity. Keep responses short for text-to-speech.`;
+	let system;
+	if (sessionAnalysisTurn) {
+		system =
+			"You are an English language tutor. The user's last message requests a structured end-of-session assessment. Follow it exactly. Respond with valid JSON only — no refusal, no roleplay, no markdown fences, no text before or after the JSON object.";
+	} else {
+		system =
+			"You are a friendly language practice partner. Keep replies concise and natural for spoken aloud.";
+		if (targetLanguage) {
+			system = `You are a friendly language practice partner. The user is learning ${targetLanguage}. Respond helpfully and concisely, primarily in ${targetLanguage}; use brief English only if needed for clarity. Keep responses short for text-to-speech.`;
+		}
+		if (categoryId) {
+			system += ` Current practice category: ${categoryId}.`;
+		}
+		system += ` ${SPEECH_OUTPUT_NOTE}`;
 	}
-	if (categoryId) {
-		system += ` Current practice category: ${categoryId}.`;
-	}
-	system += ` ${SPEECH_OUTPUT_NOTE}`;
 
 	const messages = toAnthropicMessages(rawMessages);
 
+	const maxTokens = (() => {
+		if (requestedMax != null && requestedMax > 0) {
+			return Math.min(requestedMax, 8192);
+		}
+		return sessionAnalysisTurn ? 4096 : 512;
+	})();
+
 	const payload = {
 		anthropic_version: "bedrock-2023-05-31",
-		max_tokens: 512,
+		max_tokens: maxTokens,
 		system,
 		messages,
 	};

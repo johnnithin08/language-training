@@ -50,6 +50,12 @@ export default function AppLayout() {
           href: null,
         }}
       />
+      <Tabs.Screen
+        name="session-analysis"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }
