@@ -7,6 +7,13 @@ type User @model @auth(rules: [{allow: public}]) {
   currentLevel: String
 }
 
+type Session @model @auth(rules: [{ allow: owner }]) {
+  id: ID!
+  categoryId: String!
+  targetLanguage: String!
+  analysisJson: AWSJSON!
+}
+
 input AssistantMessageInput {
   role: String!
   content: String!
@@ -17,6 +24,8 @@ type Query {
     messages: [AssistantMessageInput!]!
     targetLanguage: String
     categoryId: String
+    maxTokens: Int
+    sessionAnalysisTurn: Boolean
   ): String
     @function(name: "bedrockAssistant")
     @auth(rules: [{ allow: private }])
