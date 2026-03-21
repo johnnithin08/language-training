@@ -6,3 +6,18 @@ type User @model @auth(rules: [{allow: public}]) {
   targetLanguage: String
   currentLevel: String
 }
+
+input AssistantMessageInput {
+  role: String!
+  content: String!
+}
+
+type Query {
+  assistantReply(
+    messages: [AssistantMessageInput!]!
+    targetLanguage: String
+    categoryId: String
+  ): String
+    @function(name: "bedrockAssistant")
+    @auth(rules: [{ allow: private }])
+}

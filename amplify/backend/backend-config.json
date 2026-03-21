@@ -1,12 +1,37 @@
 {
   "api": {
     "languagetraining": {
-      "dependsOn": [],
+      "dependsOn": [
+        {
+          "attributes": [
+            "UserPoolId",
+            "AppClientIDWeb",
+            "AppClientID"
+          ],
+          "category": "auth",
+          "resourceName": "languagetraining"
+        },
+        {
+          "attributes": [
+            "Name",
+            "Arn",
+            "Region"
+          ],
+          "category": "function",
+          "resourceName": "bedrockAssistant"
+        }
+      ],
       "output": {
         "authConfig": {
           "additionalAuthenticationProviders": [
             {
               "authenticationType": "AWS_IAM"
+            },
+            {
+              "authenticationType": "AMAZON_COGNITO_USER_POOLS",
+              "userPoolConfig": {
+                "userPoolId": "eu-west-2_JLEynq9Na"
+              }
             }
           ],
           "defaultAuthentication": {
@@ -54,6 +79,32 @@
       },
       "providerPlugin": "awscloudformation",
       "service": "Cognito"
+    }
+  },
+  "function": {
+    "bedrockAssistant": {
+      "build": true,
+      "dependsOn": [],
+      "providerPlugin": "awscloudformation",
+      "service": "Lambda"
+    }
+  },
+  "parameters": {
+    "AMPLIFY_function_bedrockAssistant_deploymentBucketName": {
+      "usedBy": [
+        {
+          "category": "function",
+          "resourceName": "bedrockAssistant"
+        }
+      ]
+    },
+    "AMPLIFY_function_bedrockAssistant_s3Key": {
+      "usedBy": [
+        {
+          "category": "function",
+          "resourceName": "bedrockAssistant"
+        }
+      ]
     }
   }
 }

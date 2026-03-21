@@ -1,20 +1,44 @@
 import { app, colors, white } from "@/constants/colors";
+import {
+	getCategoryDisplayLabel,
+	getOpeningPrompt,
+} from "@/constants/conversationCategoryConfig";
+import { useAuth } from "@/contexts/auth";
+import {
+	type AssistantMessage,
+	getAssistantReply,
+} from "@/services/assistant-reply";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Speech from "expo-speech";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useVoice, VoiceMode } from "react-native-voicekit";
 
+/**
+ * Voice + AI + TTS pipeline (no on-screen transcript or reply text).
+ */
+type ListeningStep =
+	| "awaiting_voice"
+	| "opening"
+	| "listening"
+	| "thinking"
+	| "playing";
+
 export default function ListeningScreen() {
 	const router = useRouter();
 	const { categoryId } = useLocalSearchParams<{ categoryId?: string }>();
+	const { userData } = useAuth();
 	const insets = useSafeAreaInsets();
-	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const [hasCapturedResult, setHasCapturedResult] = useState(false);
-	const [isSpeaking, setIsSpeaking] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [step, setStep] = useState<ListeningStep>("awaiting_voice");
+
+	const lastSubmittedRef = useRef<string | null>(null);
+	const [messages, setMessages] = useState<AssistantMessage[]>([]);
+	const messagesRef = useRef<AssistantMessage[]>([]);
+
 	const {
 		available,
 		listening,
@@ -25,88 +49,175 @@ export default function ListeningScreen() {
 	} = useVoice({
 		locale: "en-US",
 		mode: VoiceMode.ContinuousAndStop,
-		silenceTimeoutMs: 2000,
+		silenceTimeoutMs: 1000,
 		enablePartialResults: false,
 	});
 
-	console.log("ava", available);
+	const speakThenResume = useCallback(
+		(reply: string) => {
+			Speech.speak(reply, {
+				language: "en-US",
+				rate: 0.95,
+				pitch: 1.0,
+				onDone: () => {
+					resetTranscript();
+					setStep("listening");
+					startListening();
+				},
+				// onStopped: () => {
+				// 	setStep("listening");
+				// 	startListening();
+				// },
+				// onError: () => {
+				// 	setStep("listening");
+				// 	startListening();
+				// },
+			});
+		},
+		[resetTranscript, startListening],
+	);
 
+	/** Mic availability → awaiting_voice ↔ opening. Cleanup on unmount / when deps change. */
 	useEffect(() => {
-		let active = true;
-		const beginListening = async () => {
-			try {
-				if (!available) return;
-				setErrorMessage(null);
-				setHasCapturedResult(false);
-				resetTranscript();
-				await startListening();
-			} catch {
-				if (active) {
-					setErrorMessage(
-						"Could not start listening. Please try again.",
-					);
-				}
-			}
-		};
-		beginListening();
+		if (available) setStep((s) => (s === "awaiting_voice" ? "opening" : s));
+
 		return () => {
-			active = false;
 			void stopListening();
 			void Speech.stop();
 		};
-	}, [available]);
+	}, [available, stopListening]);
 
+	/**
+	 * Opening + first reply: deps intentionally omit `transcript` so recognition noise
+	 * does not restart this flow while `step === "opening"`.
+	 */
 	useEffect(() => {
-		const restart = async () => {
-			if (!listening && transcript.trim().length > 0) {
-				setHasCapturedResult(true);
+		if (!available || step !== "opening") return;
+
+		const run = async () => {
+			try {
+				await stopListening();
+				resetTranscript();
+				setError(null);
+				const opening = getOpeningPrompt(categoryId);
+				const messagesForApi: AssistantMessage[] = [
+					{ role: "user", content: opening },
+				];
+				const reply = await getAssistantReply(messagesForApi, {
+					targetLanguage: userData?.targetLanguage,
+					categoryId: categoryId ?? undefined,
+				});
+				const next: AssistantMessage[] = [
+					...messagesForApi,
+					{ role: "assistant", content: reply },
+				];
+				setMessages(next);
+				messagesRef.current = next;
+				setStep("playing");
+				await Speech.stop();
+				speakThenResume(reply);
+			} catch (e) {
+				console.error("Error in opening assistant flow", e);
+				const msg =
+					e instanceof Error ? e.message : "Could not reach the AI.";
+				setError(msg);
+				setStep("listening");
+				void startListening();
 			}
 		};
-		restart();
-	}, [listening, transcript]);
+
+		void run();
+	}, [
+		step,
+		available,
+		categoryId,
+		userData?.targetLanguage,
+		speakThenResume,
+		startListening,
+		stopListening,
+		resetTranscript,
+	]);
+
+	/** Later turns: depends on `transcript`. */
+	useEffect(() => {
+		if (step !== "listening") return;
+		if (listening) {
+			lastSubmittedRef.current = null;
+			return;
+		}
+		const text = transcript.trim();
+		if (!text) return;
+		if (lastSubmittedRef.current === text) return;
+		lastSubmittedRef.current = text;
+
+		const run = async () => {
+			setStep("thinking");
+			setError(null);
+			try {
+				const history = messagesRef.current;
+				const messagesForApi: AssistantMessage[] = [
+					...history,
+					{ role: "user", content: text },
+				];
+				const reply = await getAssistantReply(messagesForApi, {
+					targetLanguage: userData?.targetLanguage,
+					categoryId: categoryId ?? undefined,
+				});
+				const next: AssistantMessage[] = [
+					...messagesForApi,
+					{ role: "assistant", content: reply },
+				];
+				setMessages(next);
+				messagesRef.current = next;
+				setStep("playing");
+				await Speech.stop();
+				speakThenResume(reply);
+			} catch (e) {
+				console.error("Error in assistant reply flow", e);
+				const msg =
+					e instanceof Error ? e.message : "Could not reach the AI.";
+				setError(msg);
+				setStep("listening");
+				lastSubmittedRef.current = null;
+				void startListening();
+			}
+		};
+
+		void run();
+	}, [
+		step,
+		listening,
+		transcript,
+		userData?.targetLanguage,
+		categoryId,
+		speakThenResume,
+		startListening,
+		resetTranscript,
+	]);
 
 	const statusTitle = useMemo(() => {
 		if (!available) return "Voice not available";
-		if (errorMessage) return "Listening failed";
-		if (hasCapturedResult) return "Captured";
+		if (error && step === "listening") return "Something went wrong";
+		if (step === "opening" || step === "thinking") return "Thinking...";
+		if (step === "playing") return "One moment";
 		return listening ? "Listening..." : "Waiting...";
-	}, [available, errorMessage, hasCapturedResult, listening]);
+	}, [available, error, step, listening]);
 
 	const statusSubtitle = useMemo(() => {
 		if (!available)
 			return "Speech recognition is not available on this device";
-		if (errorMessage) return errorMessage;
-		if (hasCapturedResult) return "Here is what you said";
+		if (error && step === "listening") return error;
+		if (step === "opening") return "Starting your practice session";
+		if (step === "thinking") return "Asking Claude on Amazon Bedrock";
+		if (step === "playing") return "Reply is playing";
 		return "Tell the AI something";
-	}, [available, errorMessage, hasCapturedResult]);
+	}, [available, error, step]);
 
 	const helperText = useMemo(() => {
-		if (hasCapturedResult)
-			return "Auto-stopped after you finished speaking";
+		if (step === "opening" || step === "thinking") return "Hang tight";
+		if (step === "playing") return "Hang tight";
 		return "Speak naturally - No pressure";
-	}, [hasCapturedResult]);
-
-	const transcriptText = transcript.trim();
-	const canSpeak = transcriptText.length > 0;
-
-	const handleSpeakTranscript = async () => {
-		if (!canSpeak || isSpeaking) return;
-		await Speech.stop();
-		setIsSpeaking(true);
-		Speech.speak(transcriptText, {
-			language: "en-US",
-			rate: 0.95,
-			pitch: 1.0,
-			onDone: () => {
-				resetTranscript();
-				setHasCapturedResult(false);
-				setIsSpeaking(false);
-				startListening();
-			},
-			onStopped: () => setIsSpeaking(false),
-			onError: () => setIsSpeaking(false),
-		});
-	};
+	}, [step]);
 
 	return (
 		<View
@@ -139,37 +250,9 @@ export default function ListeningScreen() {
 				<Text style={styles.title}>{statusTitle}</Text>
 				<Text style={styles.subtitle}>{statusSubtitle}</Text>
 				<Text style={styles.helper}>{helperText}</Text>
-				{categoryId ? (
-					<Text style={styles.category}>Category: {categoryId}</Text>
-				) : null}
-				<Text style={styles.transcriptLabel}>Transcript</Text>
-				<View style={styles.transcriptBox}>
-					<Text style={styles.transcriptText}>
-						{transcriptText.length > 0
-							? transcript
-							: "Start speaking..."}
-					</Text>
-				</View>
-
-				<Pressable
-					style={({ pressed }) => [
-						styles.speakButton,
-						pressed && styles.speakButtonPressed,
-						(!canSpeak || isSpeaking) && styles.speakButtonDisabled,
-					]}
-					onPress={() => void handleSpeakTranscript()}
-					disabled={!canSpeak || isSpeaking}
-				>
-					<Ionicons
-						name="volume-high"
-						size={22}
-						color={white}
-						style={styles.speakIcon}
-					/>
-					<Text style={styles.speakButtonText}>
-						{isSpeaking ? "Speaking…" : "Speak transcript"}
-					</Text>
-				</Pressable>
+				<Text style={styles.category}>
+					{getCategoryDisplayLabel(categoryId)}
+				</Text>
 
 				<View style={styles.waveWrap}>
 					<View style={[styles.waveBar, { height: 18 }]} />
@@ -242,57 +325,7 @@ const styles = StyleSheet.create({
 	category: {
 		color: app.textMuted,
 		fontSize: 13,
-		marginBottom: 12,
-	},
-	transcriptLabel: {
-		color: app.textMuted,
-		fontSize: 13,
-		alignSelf: "flex-start",
-		marginBottom: 8,
-		width: "100%",
-	},
-	transcriptBox: {
-		width: "100%",
-		minHeight: 96,
-		borderRadius: 14,
-		backgroundColor: "#111934",
-		borderWidth: 1,
-		borderColor: "#2a3561",
-		paddingHorizontal: 14,
-		paddingVertical: 12,
-		marginBottom: 20,
-	},
-	transcriptText: {
-		color: white,
-		fontSize: 16,
-		lineHeight: 22,
-	},
-	speakButton: {
-		width: "100%",
-		flexDirection: "row",
-		alignItems: "center",
-		justifyContent: "center",
-		backgroundColor: colors.slate[700],
-		borderRadius: 16,
-		borderWidth: 1,
-		borderColor: colors.slate[600],
-		paddingVertical: 16,
-		paddingHorizontal: 20,
-		marginBottom: 20,
-	},
-	speakButtonPressed: {
-		opacity: 0.9,
-	},
-	speakButtonDisabled: {
-		opacity: 0.45,
-	},
-	speakIcon: {
-		marginRight: 10,
-	},
-	speakButtonText: {
-		color: white,
-		fontSize: 17,
-		fontWeight: "700",
+		marginBottom: 24,
 	},
 	waveWrap: {
 		flexDirection: "row",

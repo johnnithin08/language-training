@@ -4,25 +4,13 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { app, colors, white } from '@/constants/colors';
+import { CONVERSATION_CATEGORIES } from '@/constants/conversationCategoryConfig';
 
-type Category = {
-  id: string;
-  title: string;
-  emoji: string;
-};
-
-const CATEGORIES: Category[] = [
-  { id: 'restaurant', title: 'Restaurant', emoji: '🍽️' },
-  { id: 'hotel-checkin', title: 'Hotel Check-in', emoji: '🏨' },
-  { id: 'shopping', title: 'Shopping', emoji: '🛍️' },
-  { id: 'taxi', title: 'Getting a Taxi', emoji: '🚕' },
-  { id: 'introductions', title: 'Introductions', emoji: '👋' },
-  { id: 'doctor', title: 'At the Doctor', emoji: '🏥' },
-  { id: 'plans', title: 'Making Plans', emoji: '🎉' },
-  { id: 'job-interview', title: 'Job Interview', emoji: '💼' },
-  { id: 'directions', title: 'Asking Directions', emoji: '🗺️' },
-  { id: 'free-talk', title: 'Free Talk', emoji: '🎭' },
-];
+const CATEGORIES = CONVERSATION_CATEGORIES.map(({ id, title, emoji }) => ({
+  id,
+  title,
+  emoji,
+}));
 
 export default function ConversationsScreen() {
   const router = useRouter();
