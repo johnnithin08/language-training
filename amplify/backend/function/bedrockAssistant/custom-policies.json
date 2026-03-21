@@ -1,0 +1,11 @@
+[
+	{
+		"Action": [
+			"bedrock:InvokeModel",
+			"bedrock:InvokeModelWithResponseStream"
+		],
+		"Resource": [
+			"arn:aws:bedrock:eu-west-2::foundation-model/anthropic.claude-sonnet-4-6"
+		]
+	}
+]

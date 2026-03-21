@@ -1,5 +1,6 @@
 {
   "AppSyncApiName": "languagetraining",
   "DynamoDBBillingMode": "PAY_PER_REQUEST",
-  "DynamoDBEnableServerSideEncryption": false
+  "DynamoDBEnableServerSideEncryption": false,
+  "AuthCognitoUserPoolId": "eu-west-2_JLEynq9Na"
 }

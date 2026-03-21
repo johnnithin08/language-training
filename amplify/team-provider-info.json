@@ -17,6 +17,12 @@
       },
       "api": {
         "languagetraining": {}
+      },
+      "function": {
+        "bedrockAssistant": {
+          "deploymentBucketName": "amplify-languagetraining-staging-cefbd-deployment",
+          "s3Key": "amplify-builds/bedrockAssistant-764d6f46465256366753-build.zip"
+        }
       }
     }
   }

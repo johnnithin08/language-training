@@ -1,20 +1,28 @@
 import { app, colors, white } from "@/constants/colors";
+import { useAuth } from "@/contexts/auth";
+import { getAssistantReply } from "@/services/assistant-reply";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Speech from "expo-speech";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useVoice, VoiceMode } from "react-native-voicekit";
 
+type FlowPhase = "idle" | "thinking" | "speaking";
+
 export default function ListeningScreen() {
 	const router = useRouter();
 	const { categoryId } = useLocalSearchParams<{ categoryId?: string }>();
+	const { userData } = useAuth();
 	const insets = useSafeAreaInsets();
-	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const [hasCapturedResult, setHasCapturedResult] = useState(false);
-	const [isSpeaking, setIsSpeaking] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [flow, setFlow] = useState<FlowPhase>("idle");
+	const [lastReplyText, setLastReplyText] = useState<string | null>(null);
+	const lastSubmittedRef = useRef<string | null>(null);
+	const completedRef = useRef(false);
+
 	const {
 		available,
 		listening,
@@ -29,22 +37,18 @@ export default function ListeningScreen() {
 		enablePartialResults: false,
 	});
 
-	console.log("ava", available);
-
 	useEffect(() => {
 		let active = true;
 		const beginListening = async () => {
 			try {
 				if (!available) return;
-				setErrorMessage(null);
-				setHasCapturedResult(false);
+				setError(null);
+				setFlow("idle");
 				resetTranscript();
 				await startListening();
 			} catch {
 				if (active) {
-					setErrorMessage(
-						"Could not start listening. Please try again.",
-					);
+					setError("Could not start listening. Please try again.");
 				}
 			}
 		};
@@ -57,56 +61,121 @@ export default function ListeningScreen() {
 	}, [available]);
 
 	useEffect(() => {
-		const restart = async () => {
-			if (!listening && transcript.trim().length > 0) {
-				setHasCapturedResult(true);
+		if (listening) {
+			lastSubmittedRef.current = null;
+			return;
+		}
+		const text = transcript.trim();
+		if (!text) return;
+		if (lastSubmittedRef.current === text) return;
+		lastSubmittedRef.current = text;
+		completedRef.current = false;
+		let cancelled = false;
+
+		const run = async () => {
+			setFlow("thinking");
+			setError(null);
+			try {
+				const reply = await getAssistantReply(
+					[{ role: "user", content: text }],
+					{
+						targetLanguage: userData?.targetLanguage,
+						categoryId: categoryId ?? undefined,
+					},
+				);
+				if (cancelled) return;
+				completedRef.current = true;
+				setLastReplyText(reply);
+				setFlow("speaking");
+				await Speech.stop();
+				Speech.speak(reply, {
+					language: "en-US",
+					rate: 0.95,
+					pitch: 1.0,
+					onDone: () => {
+						if (cancelled) return;
+						resetTranscript();
+						setFlow("idle");
+						void startListening();
+					},
+					onStopped: () => {
+						setFlow("idle");
+					},
+					onError: () => {
+						setFlow("idle");
+					},
+				});
+			} catch (e) {
+				console.error("Error in assistant reply flow", e);
+				if (cancelled) return;
+				const msg =
+					e instanceof Error ? e.message : "Could not reach the AI.";
+				setError(msg);
+				setFlow("idle");
+				lastSubmittedRef.current = null;
 			}
 		};
-		restart();
-	}, [listening, transcript]);
+
+		void run();
+		return () => {
+			cancelled = true;
+			if (!completedRef.current) {
+				lastSubmittedRef.current = null;
+			}
+		};
+	}, [listening, transcript, userData?.targetLanguage, categoryId]);
+
+	const transcriptText = transcript.trim();
+	const utteranceCaptured = !listening && transcriptText.length > 0;
 
 	const statusTitle = useMemo(() => {
 		if (!available) return "Voice not available";
-		if (errorMessage) return "Listening failed";
-		if (hasCapturedResult) return "Captured";
+		if (error) return "Something went wrong";
+		if (flow === "thinking") return "Thinking...";
+		if (flow === "speaking") return "Speaking...";
 		return listening ? "Listening..." : "Waiting...";
-	}, [available, errorMessage, hasCapturedResult, listening]);
+	}, [available, error, flow, listening]);
 
 	const statusSubtitle = useMemo(() => {
 		if (!available)
 			return "Speech recognition is not available on this device";
-		if (errorMessage) return errorMessage;
-		if (hasCapturedResult) return "Here is what you said";
+		if (error) return error;
+		if (flow === "thinking") return "Asking Claude on Amazon Bedrock";
+		if (flow === "speaking") return "Playing the assistant reply";
 		return "Tell the AI something";
-	}, [available, errorMessage, hasCapturedResult]);
+	}, [available, error, flow]);
 
 	const helperText = useMemo(() => {
-		if (hasCapturedResult)
+		if (flow === "thinking") return "Hang tight";
+		if (utteranceCaptured)
 			return "Auto-stopped after you finished speaking";
 		return "Speak naturally - No pressure";
-	}, [hasCapturedResult]);
+	}, [flow, utteranceCaptured]);
 
-	const transcriptText = transcript.trim();
-	const canSpeak = transcriptText.length > 0;
+	const assistantBoxText = useMemo(() => {
+		if (flow === "thinking") return "…";
+		if (flow === "speaking" && lastReplyText?.trim()) return lastReplyText;
+		return "Reply will appear here";
+	}, [flow, lastReplyText]);
 
-	const handleSpeakTranscript = async () => {
-		if (!canSpeak || isSpeaking) return;
+	const canReplay = (lastReplyText?.length ?? 0) > 0 && flow === "idle";
+
+	const handleReplayLastReply = async () => {
+		const text = lastReplyText;
+		if (!text || flow !== "idle") return;
 		await Speech.stop();
-		setIsSpeaking(true);
-		Speech.speak(transcriptText, {
+		setFlow("speaking");
+		Speech.speak(text, {
 			language: "en-US",
 			rate: 0.95,
 			pitch: 1.0,
-			onDone: () => {
-				resetTranscript();
-				setHasCapturedResult(false);
-				setIsSpeaking(false);
-				startListening();
-			},
-			onStopped: () => setIsSpeaking(false),
-			onError: () => setIsSpeaking(false),
+			onDone: () => setFlow("idle"),
+			onStopped: () => setFlow("idle"),
+			onError: () => setFlow("idle"),
 		});
 	};
+
+	const replayDisabled = !canReplay || flow !== "idle";
 
 	return (
 		<View
@@ -142,7 +211,7 @@ export default function ListeningScreen() {
 				{categoryId ? (
 					<Text style={styles.category}>Category: {categoryId}</Text>
 				) : null}
-				<Text style={styles.transcriptLabel}>Transcript</Text>
+				<Text style={styles.transcriptLabel}>You</Text>
 				<View style={styles.transcriptBox}>
 					<Text style={styles.transcriptText}>
 						{transcriptText.length > 0
@@ -151,14 +220,21 @@ export default function ListeningScreen() {
 					</Text>
 				</View>
 
+				<Text style={styles.transcriptLabel}>Assistant</Text>
+				<View style={styles.transcriptBox}>
+					<Text style={styles.transcriptText}>
+						{assistantBoxText}
+					</Text>
+				</View>
+
 				<Pressable
 					style={({ pressed }) => [
 						styles.speakButton,
 						pressed && styles.speakButtonPressed,
-						(!canSpeak || isSpeaking) && styles.speakButtonDisabled,
+						replayDisabled && styles.speakButtonDisabled,
 					]}
-					onPress={() => void handleSpeakTranscript()}
-					disabled={!canSpeak || isSpeaking}
+					onPress={() => void handleReplayLastReply()}
+					disabled={replayDisabled}
 				>
 					<Ionicons
 						name="volume-high"
@@ -167,7 +243,9 @@ export default function ListeningScreen() {
 						style={styles.speakIcon}
 					/>
 					<Text style={styles.speakButtonText}>
-						{isSpeaking ? "Speaking…" : "Speak transcript"}
+						{flow === "speaking"
+							? "Speaking…"
+							: "Replay last reply"}
 					</Text>
 				</Pressable>
 
