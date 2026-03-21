@@ -164,6 +164,17 @@
                 "arn:aws:bedrock:eu-west-2::foundation-model/anthropic.claude-sonnet-4-6"
               ],
               "Effect": "Allow"
+            },
+            {
+              "Action": [
+                "aws-marketplace:ViewSubscriptions",
+                "aws-marketplace:Subscribe",
+                "aws-marketplace:Unsubscribe"
+              ],
+              "Resource": [
+                "*"
+              ],
+              "Effect": "Allow"
             }
           ]
         },

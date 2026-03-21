@@ -21,7 +21,7 @@
       "function": {
         "bedrockAssistant": {
           "deploymentBucketName": "amplify-languagetraining-staging-cefbd-deployment",
-          "s3Key": "amplify-builds/bedrockAssistant-764d6f46465256366753-build.zip"
+          "s3Key": "amplify-builds/bedrockAssistant-7a4a656f386f7a76674e-build.zip"
         }
       }
     }

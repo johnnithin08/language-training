@@ -36,6 +36,10 @@ exports.handler = async (event) => {
 	const targetLanguage = args.targetLanguage;
 	const categoryId = args.categoryId;
 
+	// Keep in sync with SPEECH_OUTPUT_NOTE in constants/conversationCategoryConfig.ts
+	const SPEECH_OUTPUT_NOTE =
+		"Note: Replies are read aloud with Expo Speech. Use plain text only: letters, numbers, spaces, and basic punctuation (periods, commas, question marks, apostrophes in words). Do not use emojis, asterisks, markdown, bullet lists, quotation marks for formatting, angle brackets, or other special symbols.";
+
 	let system =
 		"You are a friendly language practice partner. Keep replies concise and natural for spoken aloud.";
 	if (targetLanguage) {
@@ -44,6 +48,7 @@ exports.handler = async (event) => {
 	if (categoryId) {
 		system += ` Current practice category: ${categoryId}.`;
 	}
+	system += ` ${SPEECH_OUTPUT_NOTE}`;
 
 	const messages = toAnthropicMessages(rawMessages);
 
