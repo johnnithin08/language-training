@@ -9,6 +9,10 @@ import {
 	scoreToDisplayColor,
 	type SessionListItem,
 } from "@/services/session";
+import {
+	getStoredMicPermission,
+	syncMicPermissionState,
+} from "@/utils/mic-permission";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { fetchUserAttributes } from "aws-amplify/auth";
@@ -17,6 +21,9 @@ import { useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
 	ActivityIndicator,
+	FlatList,
+	ListRenderItem,
+	Platform,
 	Pressable,
 	StyleSheet,
 	Text,
@@ -40,6 +47,9 @@ export default function HomeScreen() {
 	const [sessions, setSessions] = useState<SessionRow[]>([]);
 	const [sessionsLoading, setSessionsLoading] = useState(true);
 	const [sessionsError, setSessionsError] = useState<string | null>(null);
+	const [micAllowed, setMicAllowed] = useState<boolean | null>(
+		Platform.OS === "android" ? null : true,
+	);
 
 	const mapItemToRow = useCallback((item: SessionListItem): SessionRow => {
 		const overall = item.analysis?.scores.overall ?? 0;
@@ -105,20 +115,96 @@ export default function HomeScreen() {
 		}, []),
 	);
 
+	useFocusEffect(
+		useCallback(() => {
+			if (Platform.OS !== "android") return;
+			let cancelled = false;
+			const run = async () => {
+				const stored = await getStoredMicPermission();
+				if (!cancelled && stored === "denied") {
+					setMicAllowed(false);
+				}
+				const ok = await syncMicPermissionState();
+				if (!cancelled) setMicAllowed(ok);
+			};
+			void run();
+			return () => {
+				cancelled = true;
+			};
+		}, []),
+	);
+
 	const greeting = useMemo(() => `Welcome back ${name}`, [name]);
 
+	const contentPadding = useMemo(
+		() => ({
+			paddingTop: insets.top + 24,
+			paddingBottom: insets.bottom + 24,
+			paddingLeft: insets.left + 24,
+			paddingRight: insets.right + 24,
+		}),
+		[insets.bottom, insets.left, insets.right, insets.top],
+	);
+
+	const renderSession: ListRenderItem<SessionRow> = useCallback(
+		({ item }) => (
+			<Pressable
+				style={({ pressed }) => [
+					styles.card,
+					pressed && styles.cardPressed,
+				]}
+				onPress={() =>
+					router.push({
+						pathname: "/(app)/session-analysis",
+						params: { sessionId: item.id },
+					})
+				}
+			>
+				<View style={styles.iconWrap}>
+					<Text style={styles.iconText}>{item.emoji}</Text>
+				</View>
+				<View style={styles.cardBody}>
+					<Text style={styles.cardTitle}>{item.title}</Text>
+					<Text style={styles.cardMeta}>{item.meta}</Text>
+				</View>
+				<View style={styles.scoreWrap}>
+					<Text
+						style={[styles.scoreValue, { color: item.scoreColor }]}
+					>
+						{item.score}
+					</Text>
+					<Text style={styles.scoreLabel}>Score</Text>
+				</View>
+			</Pressable>
+		),
+		[router],
+	);
+
+	const listEmpty = useMemo(() => {
+		if (sessionsLoading) {
+			return (
+				<View style={styles.sessionsLoading}>
+					<ActivityIndicator color={app.buttonPrimary} />
+					<Text style={styles.sessionsLoadingText}>
+						Loading sessions…
+					</Text>
+				</View>
+			);
+		}
+		if (sessionsError) {
+			return (
+				<Text style={styles.sessionsError}>{sessionsError}</Text>
+			);
+		}
+		return (
+			<Text style={styles.sessionsEmpty}>
+				No sessions yet. Finish a conversation to see your score here.
+			</Text>
+		);
+	}, [sessionsLoading, sessionsError]);
+
 	return (
-		<View
-			style={[
-				styles.container,
-				{
-					paddingTop: insets.top + 24,
-					paddingBottom: insets.bottom + 24,
-					paddingLeft: insets.left + 24,
-					paddingRight: insets.right + 24,
-				},
-			]}
-		>
+		<View style={[styles.container, contentPadding]}>
 			<Text style={styles.welcome}>{greeting}</Text>
 			<Text style={styles.title}>Ready to practice?</Text>
 
@@ -126,8 +212,10 @@ export default function HomeScreen() {
 			<Pressable
 				style={({ pressed }) => [
 					styles.newConversationCard,
-					pressed && styles.cardPressed,
+					micAllowed !== true && styles.newConversationCardDisabled,
+					pressed && micAllowed === true && styles.cardPressed,
 				]}
+				disabled={micAllowed !== true}
 				onPress={() => router.push("/(app)/conversations")}
 			>
 				<LinearGradient
@@ -145,77 +233,46 @@ export default function HomeScreen() {
 				<View style={styles.cardBody}>
 					<Text style={styles.cardTitle}>New Conversation</Text>
 					<Text style={styles.cardMeta}>
-						English practice • Choose a topic
+						{micAllowed === false
+							? "Allow microphone access in Settings to start"
+							: "English practice • Choose a topic"}
 					</Text>
 				</View>
 				<Text style={styles.chevron}>›</Text>
 			</Pressable>
 
 			<Text style={styles.sectionLabel}>RECENT SESSIONS</Text>
-			{sessionsLoading ? (
-				<View style={styles.sessionsLoading}>
-					<ActivityIndicator color={app.buttonPrimary} />
-					<Text style={styles.sessionsLoadingText}>
-						Loading sessions…
-					</Text>
-				</View>
-			) : sessionsError ? (
-				<Text style={styles.sessionsError}>{sessionsError}</Text>
-			) : sessions.length === 0 ? (
-				<Text style={styles.sessionsEmpty}>
-					No sessions yet. Finish a conversation to see your score
-					here.
-				</Text>
-			) : (
-				<View style={styles.listWrap}>
-					{sessions.map((item) => (
-						<Pressable
-							key={item.id}
-							style={({ pressed }) => [
-								styles.card,
-								pressed && styles.cardPressed,
-							]}
-							onPress={() =>
-								router.push({
-									pathname: "/(app)/session-analysis",
-									params: { sessionId: item.id },
-								})
-							}
-						>
-							<View style={styles.iconWrap}>
-								<Text style={styles.iconText}>
-									{item.emoji}
-								</Text>
-							</View>
-							<View style={styles.cardBody}>
-								<Text style={styles.cardTitle}>
-									{item.title}
-								</Text>
-								<Text style={styles.cardMeta}>{item.meta}</Text>
-							</View>
-							<View style={styles.scoreWrap}>
-								<Text
-									style={[
-										styles.scoreValue,
-										{ color: item.scoreColor },
-									]}
-								>
-									{item.score}
-								</Text>
-								<Text style={styles.scoreLabel}>Score</Text>
-							</View>
-						</Pressable>
-					))}
-				</View>
-			)}
+			<FlatList
+				style={styles.sessionsList}
+				data={sessions}
+				keyExtractor={(item) => item.id}
+				renderItem={renderSession}
+				ListEmptyComponent={listEmpty}
+				ItemSeparatorComponent={SessionSeparator}
+				contentContainerStyle={styles.sessionsListContent}
+				showsVerticalScrollIndicator={false}
+			/>
 		</View>
 	);
+}
+
+function SessionSeparator() {
+	return <View style={styles.sessionSeparator} />;
 }
 
 const styles = StyleSheet.create({
 	container: {
 		flex: 1,
 		backgroundColor: colors.slate[900],
+	},
+	sessionsList: {
+		flex: 1,
+	},
+	sessionsListContent: {
+		flexGrow: 1,
+	},
+	sessionSeparator: {
+		height: 14,
 	},
 	welcome: {
 		fontSize: 18,
@@ -234,9 +291,6 @@ const styles = StyleSheet.create({
 		color: app.textMuted,
 		letterSpacing: 0.8,
 		marginBottom: 16,
-	},
-	listWrap: {
-		gap: 14,
 	},
 	sessionsLoading: {
 		flexDirection: "row",
@@ -278,6 +332,9 @@ const styles = StyleSheet.create({
 		flexDirection: "row",
 		alignItems: "center",
 		marginBottom: 24,
+	},
+	newConversationCardDisabled: {
+		opacity: 0.55,
 	},
 	newConversationIconWrap: {
 		width: 56,

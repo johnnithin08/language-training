@@ -5,44 +5,10 @@ import { Redirect, useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-type Option = {
-	id: string;
-	title: string;
-	subtitle: string;
-	emoji: string;
-};
-
-const LANGUAGE_OPTIONS: Option[] = [
-	{ id: "english", title: "English", subtitle: "English", emoji: "🇺🇸" },
-];
-
-const LEVEL_OPTIONS: Option[] = [
-	{
-		id: "beginner",
-		title: "Beginner",
-		subtitle: "I know a few words and phrases",
-		emoji: "🌱",
-	},
-	{
-		id: "elementary",
-		title: "Elementary",
-		subtitle: "I can have simple conversations",
-		emoji: "📘",
-	},
-	{
-		id: "intermediate",
-		title: "Intermediate",
-		subtitle: "I can discuss everyday topics",
-		emoji: "🗣️",
-	},
-	{
-		id: "advanced",
-		title: "Advanced",
-		subtitle: "I am nearly fluent but want to refine",
-		emoji: "🎓",
-	},
-];
+import {
+	LANGUAGE_OPTIONS,
+	LEVEL_OPTIONS,
+} from "@/constants/learningOptions";
 
 export default function OnboardingScreen() {
 	const insets = useSafeAreaInsets();

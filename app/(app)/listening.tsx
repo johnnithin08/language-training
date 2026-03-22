@@ -9,6 +9,7 @@ import {
 	getAssistantReply,
 } from "@/services/assistant-reply";
 import { analyzeSession, saveSession } from "@/services/session";
+import { ensureMicPermission } from "@/utils/mic-permission";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -48,6 +49,17 @@ export default function ListeningScreen() {
 	const [messages, setMessages] = useState<AssistantMessage[]>([]);
 	const messagesRef = useRef<AssistantMessage[]>([]);
 
+	/** Stable reference — inline options each render makes useVoice recreate listeners/callbacks every frame. */
+	const voiceOptions = useMemo(
+		() => ({
+			locale: "en-US",
+			mode: VoiceMode.ContinuousAndStop,
+			silenceTimeoutMs: 1250,
+			enablePartialResults: false,
+		}),
+		[],
+	);
+
 	const {
 		available,
 		listening,
@@ -55,12 +67,10 @@ export default function ListeningScreen() {
 		startListening,
 		stopListening,
 		resetTranscript,
-	} = useVoice({
-		locale: "en-US",
-		mode: VoiceMode.ContinuousAndStop,
-		silenceTimeoutMs: 1250,
-		enablePartialResults: false,
-	});
+	} = useVoice(voiceOptions);
+
+	const stopListeningRef = useRef(stopListening);
+	stopListeningRef.current = stopListening;
 
 	const speakThenResume = useCallback(
 		(reply: string) => {
@@ -86,15 +96,26 @@ export default function ListeningScreen() {
 		[resetTranscript, startListening],
 	);
 
-	/** Mic availability → awaiting_voice ↔ opening. Cleanup on unmount / when deps change. */
+	useEffect(() => {
+		void ensureMicPermission().then((ok) => {
+			if (!ok) {
+				setError("Microphone access is required for voice practice.");
+			}
+		});
+	}, []);
+
+	/** When speech becomes available, leave the idle state. */
 	useEffect(() => {
 		if (available) setStep((s) => (s === "awaiting_voice" ? "opening" : s));
+	}, [available]);
 
+	/** Unmount only — do not tie cleanup to `stopListening` or it runs every render and kills recognition. */
+	useEffect(() => {
 		return () => {
-			void stopListening();
+			void stopListeningRef.current();
 			void Speech.stop();
 		};
-	}, [available, stopListening]);
+	}, []);
 
 	/**
 	 * Opening + first reply: deps intentionally omit `transcript` so recognition noise
@@ -252,6 +273,13 @@ export default function ListeningScreen() {
 					targetLanguage: userData?.targetLanguage ?? "English",
 					analysis,
 				});
+				lastSubmittedRef.current = null;
+				messagesRef.current = [];
+				setMessages([]);
+				setError(null);
+				setIsEndingSession(false);
+				setStep("awaiting_voice");
+				resetTranscript();
 				router.replace({
 					pathname: "/(app)/session-analysis",
 					params: { sessionId },
@@ -272,6 +300,7 @@ export default function ListeningScreen() {
 		userData?.targetLanguage,
 		userData?.currentLevel,
 		router,
+		resetTranscript,
 	]);
 
 	return (

@@ -1,9 +1,16 @@
-import { app, scoreTrendChart } from "@/constants/colors";
+import {
+	app,
+	SCORE_BANDS,
+	scoreBarGradient,
+	scoreChartLabelColor,
+	scoreTrendChart,
+} from "@/constants/colors";
 import type { SessionListItem } from "@/services/session";
 import { Ionicons } from "@expo/vector-icons";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
 	Easing,
+	Pressable,
 	StyleSheet,
 	Text,
 	useWindowDimensions,
@@ -16,23 +23,20 @@ const MAX_SESSIONS = 10;
 /** Scroll horizontal padding (24*2) + card horizontal padding (18*2) */
 const CHART_WIDTH_INSET = 84;
 
-function paletteIndex(i: number, n: number): number {
-	if (n <= 1) return 0;
-	const t = i / (n - 1);
-	const len = scoreTrendChart.barGradients.length;
-	return Math.min(len - 1, Math.round(t * (len - 1)));
-}
+export type ScoreTrendRange = "this_month" | "last_3_months";
 
-function barGradientAt(i: number, n: number): [string, string] {
-	const j = paletteIndex(i, n);
-	return [...scoreTrendChart.barGradients[j]!] as [string, string];
-}
-
-/** Score labels use the lighter (top) stop so they match each bar’s highlight. */
-function labelColorAt(i: number, n: number): string {
-	const j = paletteIndex(i, n);
-	const pair = scoreTrendChart.barGradients[j];
-	return pair?.[1] ?? app.textMuted;
+/** Filter sessions by `createdAt` (local calendar): this month, or current month plus two prior months. */
+function filterSessionsByRange(
+	items: SessionListItem[],
+	range: ScoreTrendRange,
+): SessionListItem[] {
+	if (items.length === 0) return [];
+	const now = new Date();
+	const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+	const threeMonthsStart = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+	const cutoff = range === "this_month" ? thisMonthStart : threeMonthsStart;
+	const t = cutoff.getTime();
+	return items.filter((s) => new Date(s.createdAt).getTime() >= t);
 }
 
 /** Last N sessions chronologically (oldest → newest); length ≤ MAX_SESSIONS, no padding. */
@@ -52,12 +56,23 @@ type Props = {
 	sessions: SessionListItem[];
 };
 
+const RANGE_OPTIONS: { key: ScoreTrendRange; label: string }[] = [
+	{ key: "this_month", label: "This month" },
+	{ key: "last_3_months", label: "Last 3 months" },
+];
+
 export function ScoreTrendChart({ sessions }: Props) {
+	const [range, setRange] = useState<ScoreTrendRange>("last_3_months");
 	const { width: windowWidth } = useWindowDimensions();
 	const chartWidth = Math.max(200, windowWidth - CHART_WIDTH_INSET);
 
-	const { scores, average, delta, nBars, chartData } = useMemo(() => {
-		const scores = buildSeries(sessions);
+	const filteredSessions = useMemo(
+		() => filterSessionsByRange(sessions, range),
+		[sessions, range],
+	);
+
+	const { scores, average, delta, chartData } = useMemo(() => {
+		const scores = buildSeries(filteredSessions);
 		const nums = scores.filter((x): x is number => x != null);
 		const average =
 			nums.length > 0
@@ -65,12 +80,15 @@ export function ScoreTrendChart({ sessions }: Props) {
 				: null;
 		const delta =
 			nums.length >= 2 ? nums[nums.length - 1]! - nums[0]! : 0;
-		const nBars = scores.length;
 
 		const chartData = scores.map((score, i) => {
-			const [g0, g1] = barGradientAt(i, nBars);
-			const scoreColor = labelColorAt(i, nBars);
 			const has = score != null;
+			const [g0, g1] = has
+				? scoreBarGradient(score)
+				: (["transparent", "transparent"] as [string, string]);
+			const scoreColor = has
+				? scoreChartLabelColor(score)
+				: app.textMuted;
 			return {
 				value: has ? score : 0,
 				label: `S${i + 1}`,
@@ -97,15 +115,68 @@ export function ScoreTrendChart({ sessions }: Props) {
 			};
 		});
 
-		return { scores, average, delta, nBars, chartData };
-	}, [sessions]);
+		return { scores, average, delta, chartData };
+	}, [filteredSessions]);
 
 	const hasAny = scores.some((s) => s != null);
+	const hasSessionsInRange = filteredSessions.length > 0;
+
+	const filterRow =
+		sessions.length > 0 ? (
+			<View style={styles.filterRow}>
+				{RANGE_OPTIONS.map((opt) => {
+					const active = range === opt.key;
+					return (
+						<Pressable
+							key={opt.key}
+							onPress={() => setRange(opt.key)}
+							style={({ pressed }) => [
+								styles.filterPill,
+								active ? styles.filterPillActive : styles.filterPillIdle,
+								pressed && styles.filterPillPressed,
+							]}
+						>
+							<Text
+								style={
+									active ? styles.filterPillTextActive : styles.filterPillTextIdle
+								}
+							>
+								{opt.label}
+							</Text>
+						</Pressable>
+					);
+				})}
+			</View>
+		) : null;
+
+	if (!sessions.length) {
+		return (
+			<View style={styles.card}>
+				<Text style={styles.sectionEyebrow}>SCORE TREND</Text>
+				<Text style={styles.empty}>
+					Complete a few sessions to see your score trend here.
+				</Text>
+			</View>
+		);
+	}
+
+	if (!hasSessionsInRange) {
+		return (
+			<View style={styles.card}>
+				<Text style={styles.sectionEyebrow}>SCORE TREND</Text>
+				{filterRow}
+				<Text style={styles.empty}>
+					No sessions in this period. Try the other range or keep practicing.
+				</Text>
+			</View>
+		);
+	}
 
 	if (!hasAny) {
 		return (
 			<View style={styles.card}>
 				<Text style={styles.sectionEyebrow}>SCORE TREND</Text>
+				{filterRow}
 				<Text style={styles.empty}>
 					Complete a few sessions to see your score trend here.
 				</Text>
@@ -129,6 +200,8 @@ export function ScoreTrendChart({ sessions }: Props) {
 					</Text>
 				</View>
 			</View>
+
+			{filterRow}
 
 			<View style={styles.chartWrap}>
 				<BarChart
@@ -160,6 +233,25 @@ export function ScoreTrendChart({ sessions }: Props) {
 				/>
 			</View>
 
+			<View style={styles.legend}>
+				{SCORE_BANDS.map((band) => (
+					<View key={band.key} style={styles.legendItem}>
+						<View
+							style={[
+								styles.legendSwatch,
+								{
+									backgroundColor: band.solid,
+								},
+							]}
+						/>
+						<View style={styles.legendTextCol}>
+							<Text style={styles.legendLabel}>{band.label}</Text>
+							<Text style={styles.legendRange}>{band.rangeLabel}</Text>
+						</View>
+					</View>
+				))}
+			</View>
+
 			<View style={styles.footer}>
 				<View style={styles.footerLeft}>
 					<View style={styles.footerDot} />
@@ -186,7 +278,40 @@ const styles = StyleSheet.create({
 		flexDirection: "row",
 		alignItems: "center",
 		justifyContent: "space-between",
+		marginBottom: 12,
+	},
+	filterRow: {
+		flexDirection: "row",
+		flexWrap: "wrap",
+		gap: 8,
 		marginBottom: 16,
+	},
+	filterPill: {
+		paddingVertical: 8,
+		paddingHorizontal: 14,
+		borderRadius: 999,
+		borderWidth: 1,
+	},
+	filterPillActive: {
+		backgroundColor: "rgba(61, 212, 200, 0.14)",
+		borderColor: scoreTrendChart.accent,
+	},
+	filterPillIdle: {
+		backgroundColor: "transparent",
+		borderColor: scoreTrendChart.cardBorder,
+	},
+	filterPillPressed: {
+		opacity: 0.85,
+	},
+	filterPillTextActive: {
+		fontSize: 13,
+		fontWeight: "700",
+		color: scoreTrendChart.accent,
+	},
+	filterPillTextIdle: {
+		fontSize: 13,
+		fontWeight: "600",
+		color: app.textMuted,
 	},
 	sectionEyebrow: {
 		fontSize: 12,
@@ -208,6 +333,40 @@ const styles = StyleSheet.create({
 		marginBottom: 4,
 		overflow: "visible",
 		alignItems: "center",
+	},
+	legend: {
+		flexDirection: "row",
+		flexWrap: "wrap",
+		justifyContent: "space-between",
+		gap: 10,
+		marginTop: 8,
+		marginBottom: 4,
+	},
+	legendItem: {
+		flexDirection: "row",
+		alignItems: "center",
+		gap: 8,
+		minWidth: "28%",
+		flexGrow: 1,
+	},
+	legendSwatch: {
+		width: 10,
+		height: 10,
+		borderRadius: 5,
+	},
+	legendTextCol: {
+		flexShrink: 1,
+	},
+	legendLabel: {
+		fontSize: 11,
+		fontWeight: "700",
+		color: app.textPrimary,
+	},
+	legendRange: {
+		fontSize: 10,
+		fontWeight: "600",
+		color: app.textMuted,
+		marginTop: 1,
 	},
 	scoreTopLabel: {
 		fontSize: 11,
