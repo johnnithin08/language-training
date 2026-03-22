@@ -348,5 +348,35 @@ export const app = {
   iconOnLight: colors.purple[700],
 } as const;
 
+/**
+ * Dashboard score-trend card + gifted-charts styling.
+ * Custom hex/RGBA (not the Tailwind `colors` scale).
+ */
+export const scoreTrendChart = {
+  accent: '#3dd4c8',
+  footerDot: '#4f7cff',
+  cardBackground: '#111934',
+  cardBorder: '#2a3561',
+  /** Horizontal grid lines behind bars */
+  rules: 'rgba(148, 163, 184, 0.12)',
+  /** X-axis line under labels */
+  xAxis: 'rgba(148, 163, 184, 0.25)',
+  /**
+   * Bar fill: darker bottom → lighter top, oldest→newest shifts purple → mint.
+   */
+  barGradients: [
+    ['#3d2a6e', '#c9a8f5'],
+    ['#42297a', '#d2b2fa'],
+    ['#472886', '#dbbcff'],
+    ['#3f2f7a', '#c8b0f8'],
+    ['#2f4a78', '#9fd0ff'],
+    ['#1f5c68', '#6fd8e8'],
+    ['#18625c', '#5ee8d4'],
+    ['#126658', '#52e8c8'],
+    ['#0c5f52', '#46e0bc'],
+    ['#08584c', '#3ad8b0'],
+  ] as const,
+} as const;
+
 export type ColorShade = keyof (typeof colors)[keyof typeof colors];
 export type ColorName = keyof typeof colors;

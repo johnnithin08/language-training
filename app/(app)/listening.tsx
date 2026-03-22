@@ -58,7 +58,7 @@ export default function ListeningScreen() {
 	} = useVoice({
 		locale: "en-US",
 		mode: VoiceMode.ContinuousAndStop,
-		silenceTimeoutMs: 1000,
+		silenceTimeoutMs: 1250,
 		enablePartialResults: false,
 	});
 
@@ -115,6 +115,7 @@ export default function ListeningScreen() {
 				const reply = await getAssistantReply(messagesForApi, {
 					targetLanguage: userData?.targetLanguage,
 					categoryId: categoryId ?? undefined,
+					languageLevel: userData?.currentLevel,
 				});
 				const next: AssistantMessage[] = [
 					...messagesForApi,
@@ -141,6 +142,7 @@ export default function ListeningScreen() {
 		available,
 		categoryId,
 		userData?.targetLanguage,
+		userData?.currentLevel,
 		speakThenResume,
 		startListening,
 		stopListening,
@@ -198,6 +200,7 @@ export default function ListeningScreen() {
 		listening,
 		transcript,
 		userData?.targetLanguage,
+		userData?.currentLevel,
 		categoryId,
 		speakThenResume,
 		startListening,
@@ -241,7 +244,9 @@ export default function ListeningScreen() {
 			await Speech.stop();
 			const snapshot = messagesRef.current;
 			if (snapshot.length > 0) {
-				const analysis = await analyzeSession(snapshot);
+				const analysis = await analyzeSession(snapshot, {
+					languageLevel: userData?.currentLevel,
+				});
 				const sessionId = await saveSession({
 					categoryId: categoryId ?? "free-talk",
 					targetLanguage: userData?.targetLanguage ?? "English",
@@ -265,6 +270,7 @@ export default function ListeningScreen() {
 		stopListening,
 		categoryId,
 		userData?.targetLanguage,
+		userData?.currentLevel,
 		router,
 	]);
 

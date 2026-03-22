@@ -122,7 +122,24 @@ export async function getSessionById(
  * Analysis instructions only. The practice thread is sent separately as full
  * `messages` + this as the final user turn (no copied/filtered transcript).
  */
-export function buildSessionAnalysisPrompt(): string {
+export function buildSessionAnalysisPrompt(languageLevel?: string): string {
+	const level = languageLevel?.trim();
+	const learnerContext = level
+		? `
+
+---
+
+### LEARNER PROFILE (from app)
+
+The learner self-reported their level as: **${level}**
+
+Use this as context when scoring and when choosing \`cefr_level\` in the JSON. If the evidence in the thread clearly points to a different band, prioritize the evidence and note the mismatch only implicitly in strengths/weaknesses if relevant.
+
+---
+
+`
+		: "";
+
 	return `SESSION END — STRUCTURED REVIEW (required app output)
 
 This is not a chat reply. The learner finished practice; the app needs machine-readable feedback for the UI.
@@ -130,9 +147,7 @@ This is not a chat reply. The learner finished practice; the app needs machine-r
 You MUST output exactly one JSON object as specified below. Do not refuse, apologize, or say you cannot analyze or score. Do not continue the roleplay or ask questions. Do not address the user by name in prose — there is no user-facing text except inside the JSON strings.
 
 Educational assessment of the learner's English from their lines is allowed and expected. Use the thread only as evidence: score and comment on the USER's English only (ignore assistant lines for scoring, but you may read them for context).
-
----
-
+${learnerContext}
 ### SCORING CRITERIA (0–10)
 
 grammar:
@@ -265,17 +280,24 @@ function asSessionAnalysis(value: unknown): SessionAnalysis | null {
 	};
 }
 
+export type AnalyzeSessionOptions = {
+	/** Learner self-reported level from profile (`UserData.currentLevel`). */
+	languageLevel?: string;
+};
+
 /**
  * Sends the full practice `messages`, then the analysis prompt as the last user turn.
  */
 export async function analyzeSession(
 	messages: AssistantMessage[],
+	options?: AnalyzeSessionOptions,
 ): Promise<SessionAnalysis> {
 	if (!messages.length) {
 		throw new Error("messages must not be empty");
 	}
 
-	const analysisPrompt = buildSessionAnalysisPrompt();
+	const languageLevel = options?.languageLevel;
+	const analysisPrompt = buildSessionAnalysisPrompt(languageLevel);
 	const messagesForApi: AssistantMessage[] = [
 		...messages,
 		{ role: "user", content: analysisPrompt },
@@ -284,6 +306,7 @@ export async function analyzeSession(
 	const raw = await getAssistantReply(messagesForApi, {
 		sessionAnalysisTurn: true,
 		maxTokens: 4096,
+		languageLevel,
 	});
 	const parsed = extractJsonObject(raw);
 	const analysis = asSessionAnalysis(parsed);
@@ -358,20 +381,20 @@ export async function listRecentSessions(
 		(
 			response.data as {
 				listSessions?: {
-					items?: Array<{
+					items?: ({
 						id: string;
 						categoryId: string;
 						targetLanguage: string;
 						createdAt: string;
 						analysisJson?: unknown;
-					} | null>;
-				};(
+					} | null)[];
+				};
 			}
 		).listSessions?.items ?? [];
 
 	const mapped: SessionListItem[] = items
 		.filter((x): x is NonNullable<typeof x> => x != null)
-		.map((row) )[]> ({
+		.map((row) => ({
 			id: row.id,
 			categoryId: row.categoryId,
 			targetLanguage: row.targetLanguage,

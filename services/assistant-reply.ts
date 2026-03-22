@@ -10,6 +10,8 @@ export type AssistantReplyOptions = {
 	categoryId?: string;
 	maxTokens?: number;
 	sessionAnalysisTurn?: boolean;
+	/** Learner self-reported level (e.g. CEFR), from profile `currentLevel`. */
+	languageLevel?: string;
 };
 
 const client = generateClient();
@@ -21,6 +23,7 @@ const assistantReplyQuery = /* GraphQL */ `
 		$categoryId: String
 		$maxTokens: Int
 		$sessionAnalysisTurn: Boolean
+		$languageLevel: String
 	) {
 		assistantReply(
 			messages: $messages
@@ -28,6 +31,7 @@ const assistantReplyQuery = /* GraphQL */ `
 			categoryId: $categoryId
 			maxTokens: $maxTokens
 			sessionAnalysisTurn: $sessionAnalysisTurn
+			languageLevel: $languageLevel
 		)
 	}
 `;
@@ -54,6 +58,7 @@ export async function getAssistantReply(
 			categoryId: options.categoryId ?? null,
 			maxTokens: options.maxTokens ?? null,
 			sessionAnalysisTurn: options.sessionAnalysisTurn ?? null,
+			languageLevel: options.languageLevel?.trim() || null,
 		},
 		authMode: "userPool",
 	});
