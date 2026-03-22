@@ -26,6 +26,7 @@ type Query {
     categoryId: String
     maxTokens: Int
     sessionAnalysisTurn: Boolean
+    languageLevel: String
   ): String
     @function(name: "bedrockAssistant")
     @auth(rules: [{ allow: private }])

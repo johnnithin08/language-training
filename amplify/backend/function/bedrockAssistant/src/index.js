@@ -36,6 +36,10 @@ exports.handler = async (event) => {
 	const targetLanguage = args.targetLanguage;
 	const categoryId = args.categoryId;
 	const sessionAnalysisTurn = args.sessionAnalysisTurn === true;
+	const languageLevel =
+		typeof args.languageLevel === "string" && args.languageLevel.trim()
+			? args.languageLevel.trim()
+			: null;
 	const requestedMax =
 		typeof args.maxTokens === "number" && Number.isFinite(args.maxTokens)
 			? Math.floor(args.maxTokens)
@@ -49,11 +53,17 @@ exports.handler = async (event) => {
 	if (sessionAnalysisTurn) {
 		system =
 			"You are an English language tutor. The user's last message requests a structured end-of-session assessment. Follow it exactly. Respond with valid JSON only — no refusal, no roleplay, no markdown fences, no text before or after the JSON object.";
+		if (languageLevel) {
+			system += ` The learner self-reported their level as: ${languageLevel}. Use this as context when scoring and when choosing cefr_level in the JSON (evidence in the thread takes priority if they conflict).`;
+		}
 	} else {
 		system =
 			"You are a friendly language practice partner. Keep replies concise and natural for spoken aloud.";
 		if (targetLanguage) {
 			system = `You are a friendly language practice partner. The user is learning ${targetLanguage}. Respond helpfully and concisely, primarily in ${targetLanguage}; use brief English only if needed for clarity. Keep responses short for text-to-speech.`;
+		}
+		if (languageLevel) {
+			system += ` The learner self-reported their level is: ${languageLevel}. Adjust sentence length, vocabulary, and challenge to suit this level.`;
 		}
 		if (categoryId) {
 			system += ` Current practice category: ${categoryId}.`;
