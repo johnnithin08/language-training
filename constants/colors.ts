@@ -349,8 +349,82 @@ export const app = {
 } as const;
 
 /**
- * Dashboard score-trend card + gifted-charts styling.
- * Custom hex/RGBA (not the Tailwind `colors` scale).
+ * 0–10 session score color code: solid for list accents, gradients for bar charts.
+ * Bands: Developing [0, 6) → Proficient [6, 7.5) → Strong [7.5, 10].
+ */
+export type ScoreBand = {
+  min: number;
+  max: number;
+  key: 'developing' | 'proficient' | 'strong';
+  label: string;
+  /** Range hint for legends, e.g. "0 – 5.9" */
+  rangeLabel: string;
+  solid: string;
+  /** Bar chart: bottom → top */
+  gradient: readonly [string, string];
+};
+
+export const SCORE_BANDS: readonly ScoreBand[] = [
+  {
+    min: 0,
+    max: 6,
+    key: 'developing',
+    label: 'Developing',
+    rangeLabel: '0 – 5.9',
+    solid: '#f97316',
+    gradient: ['#9a3412', '#fdba74'],
+  },
+  {
+    min: 6,
+    max: 7.5,
+    key: 'proficient',
+    label: 'Proficient',
+    rangeLabel: '6 – 7.4',
+    solid: '#38bdf8',
+    gradient: ['#1e40af', '#7dd3fc'],
+  },
+  {
+    min: 7.5,
+    max: 10,
+    key: 'strong',
+    label: 'Strong',
+    rangeLabel: '7.5 – 10',
+    solid: '#2dd4bf',
+    gradient: ['#0f766e', '#5eead4'],
+  },
+] as const;
+
+function clampScore10(score: number): number {
+  if (!Number.isFinite(score)) return 0;
+  return Math.min(10, Math.max(0, score));
+}
+
+export function scoreBandForScore(score: number): ScoreBand {
+  const s = clampScore10(score);
+  if (s >= 7.5) return SCORE_BANDS[2]!;
+  if (s >= 6) return SCORE_BANDS[1]!;
+  return SCORE_BANDS[0]!;
+}
+
+/** Solid accent (home list, dots) — same tiers as {@link SCORE_BANDS}. */
+export function scoreSolidColor(score: number): string {
+  return scoreBandForScore(score).solid;
+}
+
+/** gifted-charts bar: darker bottom, lighter top. */
+export function scoreBarGradient(score: number): [string, string] {
+  const g = scoreBandForScore(score).gradient;
+  return [g[0], g[1]];
+}
+
+/** Top label above each bar — uses the lighter gradient stop. */
+export function scoreChartLabelColor(score: number): string {
+  return scoreBandForScore(score).gradient[1];
+}
+
+/**
+ * Dashboard score-trend card + gifted-charts chrome (axes, card).
+ * Bar fill colors come from {@link scoreBarGradient} / {@link SCORE_BANDS}.
  */
 export const scoreTrendChart = {
   accent: '#3dd4c8',
@@ -361,21 +435,6 @@ export const scoreTrendChart = {
   rules: 'rgba(148, 163, 184, 0.12)',
   /** X-axis line under labels */
   xAxis: 'rgba(148, 163, 184, 0.25)',
-  /**
-   * Bar fill: darker bottom → lighter top, oldest→newest shifts purple → mint.
-   */
-  barGradients: [
-    ['#3d2a6e', '#c9a8f5'],
-    ['#42297a', '#d2b2fa'],
-    ['#472886', '#dbbcff'],
-    ['#3f2f7a', '#c8b0f8'],
-    ['#2f4a78', '#9fd0ff'],
-    ['#1f5c68', '#6fd8e8'],
-    ['#18625c', '#5ee8d4'],
-    ['#126658', '#52e8c8'],
-    ['#0c5f52', '#46e0bc'],
-    ['#08584c', '#3ad8b0'],
-  ] as const,
 } as const;
 
 export type ColorShade = keyof (typeof colors)[keyof typeof colors];

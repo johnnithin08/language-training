@@ -1,3 +1,4 @@
+import { scoreSolidColor } from "@/constants/colors";
 import { generateClient } from "aws-amplify/api";
 import { type AssistantMessage, getAssistantReply } from "./assistant-reply";
 
@@ -147,11 +148,15 @@ This is not a chat reply. The learner finished practice; the app needs machine-r
 You MUST output exactly one JSON object as specified below. Do not refuse, apologize, or say you cannot analyze or score. Do not continue the roleplay or ask questions. Do not address the user by name in prose — there is no user-facing text except inside the JSON strings.
 
 Educational assessment of the learner's English from their lines is allowed and expected. Use the thread only as evidence: score and comment on the USER's English only (ignore assistant lines for scoring, but you may read them for context).
+
+### SPEECH-TO-TEXT CONTEXT
+
+The learner's lines are transcribed from speech, not typed. Do **not** treat missing or incorrect punctuation, quotation marks, or similar transcription quirks as errors. Do **not** list punctuation issues in \`common_mistakes\`, \`weaknesses\`, or \`corrected_examples\`. Base grammar assessment on tense, agreement, and sentence structure as spoken, not on written punctuation.
 ${learnerContext}
 ### SCORING CRITERIA (0–10)
 
 grammar:
-- Correct use of tense, sentence structure, and agreement
+- Correct use of tense, sentence structure, and agreement (ignore punctuation and capitalization artifacts from speech-to-text)
 
 fluency:
 - Natural flow and ease of expression
@@ -174,7 +179,7 @@ overall:
 - strengths (3–5 short bullet points)
 - weaknesses (3–5 short bullet points)
 
-- common_mistakes (list repeated or important mistakes)
+- common_mistakes (list repeated or important mistakes; exclude punctuation-only issues — transcript is from speech)
 
 - corrected_examples (up to 5):
   Each item:
@@ -191,7 +196,7 @@ overall:
 
 - Be consistent and objective
 - Score conservatively (avoid scores above 8 unless clearly advanced)
-- Focus on patterns, not one-off mistakes
+- Focus on patterns, not one-off mistakes; never nitpick punctuation from STT
 - Be constructive and encouraging
 - Keep feedback concise and clear
 - Output a single compact JSON object only (no markdown fences, no preamble, no closing remarks); short strings in arrays
@@ -459,7 +464,5 @@ export function formatSessionMeta(createdAtIso: string): string {
 }
 
 export function scoreToDisplayColor(score: number): string {
-	if (score >= 7.5) return "#2dd4bf";
-	if (score >= 6) return "#38bdf8";
-	return "#f97316";
+	return scoreSolidColor(score);
 }
