@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { app, colors, white } from '@/constants/colors';
 import { CONVERSATION_CATEGORIES } from '@/constants/conversationCategoryConfig';
+import { getUserConfig, type UserConfig } from '@/services/user-config';
 
 const CATEGORIES = CONVERSATION_CATEGORIES.map(({ id, title, emoji }) => ({
   id,
@@ -16,13 +17,26 @@ export default function ConversationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+  const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
+
+  useEffect(() => {
+    void getUserConfig().then((cfg) => setUserConfig(cfg));
+  }, []);
 
   const handleStartSession = () => {
     if (!selectedCategoryId) return;
-    router.push({
-      pathname: '/(app)/listening',
-      params: { categoryId: selectedCategoryId },
-    });
+
+    if (userConfig?.voiceToVoiceEnabled) {
+      router.push({
+        pathname: '/(app)/voice-practice',
+        params: { categoryId: selectedCategoryId, voiceId: userConfig.voiceId },
+      });
+    } else {
+      router.push({
+        pathname: '/(app)/listening',
+        params: { categoryId: selectedCategoryId },
+      });
+    }
   };
 
   return (
