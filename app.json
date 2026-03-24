@@ -63,6 +63,15 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "react-native-audio-api",
+        {
+          "iosMicrophonePermission": "Lingua AI uses the microphone for voice-to-voice practice.",
+          "androidPermissions": [
+            "android.permission.RECORD_AUDIO"
+          ]
+        }
       ]
     ],
     "experiments": {
