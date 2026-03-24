@@ -14,6 +14,12 @@ type Session @model @auth(rules: [{ allow: owner }]) {
   analysisJson: AWSJSON!
 }
 
+type UserConfig @model @auth(rules: [{ allow: owner }]) {
+  id: ID!
+  voiceToVoiceEnabled: Boolean!
+  voiceId: String!
+}
+
 input AssistantMessageInput {
   role: String!
   content: String!
