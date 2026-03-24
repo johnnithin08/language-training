@@ -28,6 +28,8 @@ export default function VoicePracticeScreen() {
 	const [isEndingSession, setIsEndingSession] = useState(false);
 	const started = useRef(false);
 
+	console.log("step", step);
+
 	useEffect(() => {
 		if (started.current) return;
 		started.current = true;
@@ -64,8 +66,8 @@ export default function VoicePracticeScreen() {
 
 	const statusSubtitle = useMemo(() => {
 		if (isEndingSession) return "Wrapping up your voice practice";
-		if (step === "connecting") return "Setting up Nova Sonic voice session";
-		if (step === "listening") return "Say something in English";
+		if (step === "connecting") return "Setting up voice session";
+		if (step === "listening") return "Say hello to start the conversation";
 		if (step === "speaking") return "AI is responding";
 		if (step === "error") return error ?? "Connection error";
 		return "Getting ready";

@@ -57,8 +57,10 @@ function verifyCognitoToken(token) {
 const bedrock = new BedrockRuntimeClient({
 	region: REGION,
 	requestHandler: new NodeHttp2Handler({
-		requestTimeout: 600_000,
-		sessionTimeout: 600_000,
+		requestTimeout: 300_000,
+		sessionTimeout: 300_000,
+		disableConcurrentStreams: false,
+		maxConcurrentStreams: 20,
 	}),
 });
 
@@ -94,10 +96,13 @@ wss.on("connection", (clientWs) => {
 
 	const promptName = randomUUID();
 	const systemContentName = randomUUID();
-	const initialUserContentName = randomUUID();
 	const audioContentName = randomUUID();
 
 	const assistantAudioContentNames = new Set();
+
+	// 50ms of silence at 16kHz 16-bit mono = 800 samples = 1600 bytes of zeros.
+	// Sent as keepalive when no real audio is in the queue.
+	const SILENCE_FRAME = Buffer.alloc(1600).toString("base64");
 
 	let systemPrompt =
 		"You are a friendly language practice partner. " +
@@ -134,6 +139,7 @@ wss.on("connection", (clientWs) => {
 			chunk: { bytes: enc.encode(JSON.stringify(obj)) },
 		});
 
+		// --- Session start ---
 		yield send({
 			event: {
 				sessionStart: {
@@ -146,6 +152,7 @@ wss.on("connection", (clientWs) => {
 			},
 		});
 
+		// --- Prompt start ---
 		yield send({
 			event: {
 				promptStart: {
@@ -164,6 +171,7 @@ wss.on("connection", (clientWs) => {
 			},
 		});
 
+		// --- System prompt (TEXT, SYSTEM) ---
 		yield send({
 			event: {
 				contentStart: {
@@ -191,38 +199,7 @@ wss.on("connection", (clientWs) => {
 			},
 		});
 
-		// Initial user text prompt to trigger the AI's opening greeting
-		// without needing real mic input.
-		yield send({
-			event: {
-				contentStart: {
-					promptName,
-					contentName: initialUserContentName,
-					type: "TEXT",
-					interactive: false,
-					role: "USER",
-					textInputConfiguration: { mediaType: "text/plain" },
-				},
-			},
-		});
-		yield send({
-			event: {
-				textInput: {
-					promptName,
-					contentName: initialUserContentName,
-					content: "Hello! Please start our practice session.",
-				},
-			},
-		});
-		yield send({
-			event: {
-				contentEnd: {
-					promptName,
-					contentName: initialUserContentName,
-				},
-			},
-		});
-
+		// --- Interactive user audio stream ---
 		yield send({
 			event: {
 				contentStart: {
@@ -261,6 +238,17 @@ wss.on("connection", (clientWs) => {
 					resolveAudio = r;
 					setTimeout(r, 50);
 				});
+				if (active && audioQueue.length === 0) {
+					yield send({
+						event: {
+							audioInput: {
+								promptName,
+								contentName: audioContentName,
+								content: SILENCE_FRAME,
+							},
+						},
+					});
+				}
 			}
 		}
 
@@ -291,6 +279,15 @@ wss.on("connection", (clientWs) => {
 					);
 					const evt = json.event;
 					if (!evt) continue;
+
+					const evtType = Object.keys(evt)[0];
+					if (evtType !== "audioOutput") {
+						console.log(
+							"Bedrock event:",
+							evtType,
+							JSON.stringify(evt[evtType]).slice(0, 200),
+						);
+					}
 
 					if (evt.contentStart) {
 						if (
@@ -327,6 +324,32 @@ wss.on("connection", (clientWs) => {
 							);
 						}
 					}
+				} else if (event.modelStreamErrorException) {
+					console.error(
+						"Model stream error:",
+						event.modelStreamErrorException,
+					);
+					clientWs.send(
+						JSON.stringify({
+							type: "error",
+							message:
+								event.modelStreamErrorException.message ||
+								"Model stream error",
+						}),
+					);
+				} else if (event.internalServerException) {
+					console.error(
+						"Internal server error:",
+						event.internalServerException,
+					);
+					clientWs.send(
+						JSON.stringify({
+							type: "error",
+							message:
+								event.internalServerException.message ||
+								"Internal server error",
+						}),
+					);
 				}
 			}
 		} catch (err) {
