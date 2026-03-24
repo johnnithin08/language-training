@@ -114,7 +114,7 @@ export function useVoiceSession() {
 			try {
 				const token = await getCognitoToken();
 
-				aiSpeaking.current = true;
+				aiSpeaking.current = false;
 
 				await AudioManager.setAudioSessionOptions({
 					iosCategory: "playAndRecord",
@@ -165,6 +165,7 @@ export function useVoiceSession() {
 				socket.binaryType = "arraybuffer";
 
 				socket.onopen = () => {
+					console.log("WebSocket connected, starting voice session");
 					socket.send(
 						JSON.stringify({
 							type: "session_start",
@@ -176,6 +177,7 @@ export function useVoiceSession() {
 				};
 
 				socket.onmessage = (evt) => {
+					console.log("WebSocket message received", evt.data);
 					if (typeof evt.data === "string") {
 						const msg = JSON.parse(evt.data);
 						if (msg.type === "ai_audio_start") {
@@ -244,7 +246,9 @@ export function useVoiceSession() {
 		if (result?.status === "error") {
 			setError(result.message);
 			setStep("error");
+			return;
 		}
+		setStep("listening");
 	}, []);
 
 	const disconnect = useCallback(() => {
