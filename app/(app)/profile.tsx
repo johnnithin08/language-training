@@ -1,5 +1,10 @@
 import { app, colors, white } from "@/constants/colors";
 import { LEVEL_OPTIONS } from "@/constants/learningOptions";
+import {
+	getOrCreateUserConfig,
+	updateUserConfig,
+	type UserConfig,
+} from "@/services/user-config";
 import { useAuth } from "@/contexts/auth";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -16,11 +21,26 @@ import {
 	Pressable,
 	ScrollView,
 	StyleSheet,
+	Switch,
 	Text,
 	TextInput,
 	View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+const VOICE_OPTIONS: { id: string; label: string }[] = [
+	{ id: "tiffany", label: "Tiffany" },
+	{ id: "matthew", label: "Matthew" },
+	{ id: "amy", label: "Amy" },
+	{ id: "lupe", label: "Lupe" },
+	{ id: "carlos", label: "Carlos" },
+	{ id: "ambre", label: "Ambre" },
+	{ id: "florian", label: "Florian" },
+	{ id: "greta", label: "Greta" },
+	{ id: "lennart", label: "Lennart" },
+	{ id: "beatrice", label: "Beatrice" },
+	{ id: "lorenzo", label: "Lorenzo" },
+];
 
 const LANGUAGE_DISPLAY: Record<string, { emoji: string; label: string }> = {
 	english: { emoji: "🇺🇸", label: "English" },
@@ -45,16 +65,24 @@ export default function ProfileScreen() {
 	const [savingLevel, setSavingLevel] = useState(false);
 	const [levelModalVisible, setLevelModalVisible] = useState(false);
 
+	const [config, setConfig] = useState<UserConfig | null>(null);
+	const [savingConfig, setSavingConfig] = useState(false);
+	const [voiceModalVisible, setVoiceModalVisible] = useState(false);
+
 	useFocusEffect(
 		useCallback(() => {
 			let active = true;
 			const load = async () => {
 				try {
-					const attributes = await fetchUserAttributes();
+					const [attributes, userConfig] = await Promise.all([
+						fetchUserAttributes(),
+						getOrCreateUserConfig(),
+					]);
 					const name = attributes.name?.trim() ?? "";
 					if (active) {
 						setFullName(name);
 						setNameDraft(name);
+						setConfig(userConfig);
 					}
 				} catch {
 					// ignore
@@ -137,6 +165,47 @@ export default function ProfileScreen() {
 			setSavingLevel(false);
 		}
 	};
+
+	const handleToggleVoice = async (enabled: boolean) => {
+		if (!config || savingConfig) return;
+		setSavingConfig(true);
+		try {
+			const updated = await updateUserConfig(config.id, {
+				voiceToVoiceEnabled: enabled,
+			});
+			setConfig(updated);
+		} catch (e) {
+			Alert.alert(
+				"Voice Mode",
+				e instanceof Error ? e.message : "Could not save setting.",
+			);
+		} finally {
+			setSavingConfig(false);
+		}
+	};
+
+	const handleSelectVoice = async (voiceId: string) => {
+		if (!config || voiceId === config.voiceId) {
+			setVoiceModalVisible(false);
+			return;
+		}
+		setSavingConfig(true);
+		try {
+			const updated = await updateUserConfig(config.id, { voiceId });
+			setConfig(updated);
+			setVoiceModalVisible(false);
+		} catch (e) {
+			Alert.alert(
+				"Voice",
+				e instanceof Error ? e.message : "Could not save voice.",
+			);
+		} finally {
+			setSavingConfig(false);
+		}
+	};
+
+	const selectedVoiceLabel =
+		VOICE_OPTIONS.find((v) => v.id === config?.voiceId)?.label ?? "—";
 
 	const handleSignOut = async () => {
 		await signOut();
@@ -237,6 +306,68 @@ export default function ProfileScreen() {
 					</Pressable>
 				</View>
 
+				<Text style={styles.cardSectionLabel}>VOICE PRACTICE</Text>
+				<View style={styles.card}>
+					<View style={styles.voiceToggleRow}>
+						<View style={styles.voiceToggleText}>
+							<Text style={styles.voiceToggleLabel}>
+								Voice-to-voice mode
+							</Text>
+							<Text style={styles.voiceToggleHint}>
+								Speak naturally and hear replies aloud
+							</Text>
+						</View>
+						<Switch
+							value={config?.voiceToVoiceEnabled ?? false}
+							onValueChange={(v) => void handleToggleVoice(v)}
+							disabled={!config || savingConfig}
+							trackColor={{
+								false: colors.slate[700],
+								true: "rgba(61, 212, 200, 0.4)",
+							}}
+							thumbColor={
+								config?.voiceToVoiceEnabled ? "#3dd4c8" : colors.slate[400]
+							}
+						/>
+					</View>
+
+					{config?.voiceToVoiceEnabled ? (
+						<>
+							<Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>
+								ASSISTANT VOICE
+							</Text>
+							<Pressable
+								style={({ pressed }) => [
+									styles.fieldBox,
+									styles.levelRow,
+									pressed && styles.levelRowPressed,
+									savingConfig && styles.levelRowDisabled,
+								]}
+								onPress={() =>
+									!savingConfig && setVoiceModalVisible(true)
+								}
+								disabled={savingConfig}
+							>
+								<Text style={styles.fieldValue}>
+									{selectedVoiceLabel}
+								</Text>
+								{savingConfig ? (
+									<ActivityIndicator
+										color={app.textMuted}
+										size="small"
+									/>
+								) : (
+									<Ionicons
+										name="chevron-forward"
+										size={20}
+										color={app.textMuted}
+									/>
+								)}
+							</Pressable>
+						</>
+					) : null}
+				</View>
+
 				<Pressable
 					style={({ pressed }) => [
 						styles.signOut,
@@ -301,6 +432,72 @@ export default function ProfileScreen() {
 										</Text>
 										<Text style={styles.levelOptionSubtitle}>
 											{option.subtitle}
+										</Text>
+									</View>
+									{selected ? (
+										<Ionicons
+											name="checkmark-circle"
+											size={24}
+											color={white}
+										/>
+									) : null}
+								</Pressable>
+							);
+						})}
+					</ScrollView>
+				</View>
+			</Modal>
+			<Modal
+				visible={voiceModalVisible}
+				animationType="slide"
+				presentationStyle="pageSheet"
+				onRequestClose={() => setVoiceModalVisible(false)}
+			>
+				<View
+					style={[
+						styles.modalContainer,
+						{
+							paddingTop: insets.top + 16,
+							paddingBottom: insets.bottom + 24,
+						},
+					]}
+				>
+					<View style={styles.modalHeader}>
+						<Text style={styles.modalTitle}>Assistant voice</Text>
+						<Pressable
+							style={styles.modalClose}
+							onPress={() => setVoiceModalVisible(false)}
+							hitSlop={12}
+						>
+							<Ionicons name="close" size={26} color={white} />
+						</Pressable>
+					</View>
+					<Text style={styles.modalSubtitle}>
+						Choose the voice for spoken replies
+					</Text>
+					<ScrollView
+						contentContainerStyle={styles.modalList}
+						showsVerticalScrollIndicator={false}
+					>
+						{VOICE_OPTIONS.map((option) => {
+							const selected = option.id === config?.voiceId;
+							return (
+								<Pressable
+									key={option.id}
+									style={[
+										styles.levelOption,
+										selected && styles.levelOptionSelected,
+									]}
+									onPress={() => void handleSelectVoice(option.id)}
+								>
+									<Ionicons
+										name="mic-outline"
+										size={22}
+										color={selected ? white : app.textMuted}
+									/>
+									<View style={styles.levelOptionText}>
+										<Text style={styles.levelOptionTitle}>
+											{option.label}
 										</Text>
 									</View>
 									{selected ? (
@@ -437,6 +634,25 @@ const styles = StyleSheet.create({
 	},
 	levelRowDisabled: {
 		opacity: 0.7,
+	},
+	voiceToggleRow: {
+		flexDirection: "row",
+		alignItems: "center",
+		justifyContent: "space-between",
+		gap: 12,
+	},
+	voiceToggleText: {
+		flex: 1,
+	},
+	voiceToggleLabel: {
+		fontSize: 16,
+		fontWeight: "700",
+		color: white,
+		marginBottom: 3,
+	},
+	voiceToggleHint: {
+		fontSize: 13,
+		color: app.textMuted,
 	},
 	signOut: {
 		flexDirection: "row",
