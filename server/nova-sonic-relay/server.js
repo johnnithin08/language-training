@@ -109,6 +109,7 @@ wss.on("connection", (clientWs) => {
 		"Keep replies concise and natural for spoken conversation.";
 	let voiceId = "tiffany";
 
+	let audioFrameCount = 0;
 	clientWs.on("message", (data, isBinary) => {
 		if (!isBinary) {
 			const msg = JSON.parse(data.toString());
@@ -124,6 +125,10 @@ wss.on("connection", (clientWs) => {
 		} else {
 			audioQueue.push(Buffer.from(data).toString("base64"));
 			if (resolveAudio) resolveAudio();
+			audioFrameCount++;
+			if (audioFrameCount % 50 === 1) {
+				console.log(`Client audio: received ${audioFrameCount} frames (queue: ${audioQueue.length})`);
+			}
 		}
 	});
 
@@ -321,6 +326,12 @@ wss.on("connection", (clientWs) => {
 							assistantAudioContentNames.delete(cn);
 							clientWs.send(
 								JSON.stringify({ type: "ai_audio_end" }),
+							);
+						}
+						if (evt.contentEnd.stopReason === "INTERRUPTED") {
+							console.log("User barge-in detected");
+							clientWs.send(
+								JSON.stringify({ type: "barge_in" }),
 							);
 						}
 					}
