@@ -94,7 +94,10 @@ wss.on("connection", (clientWs) => {
 
 	const promptName = randomUUID();
 	const systemContentName = randomUUID();
+	const initialUserContentName = randomUUID();
 	const audioContentName = randomUUID();
+
+	const assistantAudioContentNames = new Set();
 
 	let systemPrompt =
 		"You are a friendly language practice partner. " +
@@ -188,6 +191,38 @@ wss.on("connection", (clientWs) => {
 			},
 		});
 
+		// Initial user text prompt to trigger the AI's opening greeting
+		// without needing real mic input.
+		yield send({
+			event: {
+				contentStart: {
+					promptName,
+					contentName: initialUserContentName,
+					type: "TEXT",
+					interactive: false,
+					role: "USER",
+					textInputConfiguration: { mediaType: "text/plain" },
+				},
+			},
+		});
+		yield send({
+			event: {
+				textInput: {
+					promptName,
+					contentName: initialUserContentName,
+					content: "Hello! Please start our practice session.",
+				},
+			},
+		});
+		yield send({
+			event: {
+				contentEnd: {
+					promptName,
+					contentName: initialUserContentName,
+				},
+			},
+		});
+
 		yield send({
 			event: {
 				contentStart: {
@@ -257,8 +292,23 @@ wss.on("connection", (clientWs) => {
 					const evt = json.event;
 					if (!evt) continue;
 
-					if (evt.audioOutput) {
-						const pcm = Buffer.from(evt.audioOutput.content, "base64");
+					if (evt.contentStart) {
+						if (
+							evt.contentStart.type === "AUDIO" &&
+							evt.contentStart.role === "ASSISTANT"
+						) {
+							assistantAudioContentNames.add(
+								evt.contentStart.contentName,
+							);
+							clientWs.send(
+								JSON.stringify({ type: "ai_audio_start" }),
+							);
+						}
+					} else if (evt.audioOutput) {
+						const pcm = Buffer.from(
+							evt.audioOutput.content,
+							"base64",
+						);
 						clientWs.send(pcm);
 					} else if (evt.textOutput) {
 						clientWs.send(
@@ -268,6 +318,14 @@ wss.on("connection", (clientWs) => {
 								text: evt.textOutput.content,
 							}),
 						);
+					} else if (evt.contentEnd) {
+						const cn = evt.contentEnd.contentName;
+						if (assistantAudioContentNames.has(cn)) {
+							assistantAudioContentNames.delete(cn);
+							clientWs.send(
+								JSON.stringify({ type: "ai_audio_end" }),
+							);
+						}
 					}
 				}
 			}

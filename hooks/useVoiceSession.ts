@@ -11,6 +11,11 @@ const SAMPLE_RATE = 16000;
 const BUFFER_DURATION = 0.1;
 const BUFFER_LENGTH = SAMPLE_RATE * BUFFER_DURATION;
 
+// RMS above this while AI is speaking → treat as user barge-in, not echo.
+// After iOS AEC, residual echo is typically ~0.01-0.03 RMS;
+// real speech close to the mic is ~0.08+.
+const ENERGY_THRESHOLD = 0.05;
+
 export type VoiceSessionTranscript = { role: string; text: string };
 
 export type VoiceSessionStep =
@@ -19,6 +24,14 @@ export type VoiceSessionStep =
 	| "listening"
 	| "speaking"
 	| "error";
+
+function computeRMS(samples: Float32Array, frames: number): number {
+	let sum = 0;
+	for (let i = 0; i < frames; i++) {
+		sum += samples[i] * samples[i];
+	}
+	return Math.sqrt(sum / frames);
+}
 
 async function getCognitoToken(): Promise<string> {
 	const session = await fetchAuthSession();
@@ -31,7 +44,10 @@ export function useVoiceSession() {
 	const ws = useRef<WebSocket | null>(null);
 	const recorder = useRef<AudioRecorder | null>(null);
 	const audioCtx = useRef<AudioContext | null>(null);
+	const gainNode = useRef<GainNode | null>(null);
 	const nextPlayTime = useRef(0);
+	const aiSpeaking = useRef(true);
+	const echoSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const [step, setStep] = useState<VoiceSessionStep>("idle");
 	const [transcripts, setTranscripts] = useState<VoiceSessionTranscript[]>(
@@ -63,7 +79,8 @@ export function useVoiceSession() {
 	const playPcmChunk = useCallback(
 		(pcmBuffer: ArrayBuffer) => {
 			const ctx = audioCtx.current;
-			if (!ctx) return;
+			const gain = gainNode.current;
+			if (!ctx || !gain) return;
 
 			const float32 = int16ToFloat32(pcmBuffer);
 			if (float32.length === 0) return;
@@ -77,7 +94,7 @@ export function useVoiceSession() {
 
 			const source = ctx.createBufferSource();
 			source.buffer = audioBuffer;
-			source.connect(ctx.destination);
+			source.connect(gain);
 
 			const now = ctx.currentTime;
 			const startAt = Math.max(now, nextPlayTime.current);
@@ -97,15 +114,20 @@ export function useVoiceSession() {
 			try {
 				const token = await getCognitoToken();
 
+				aiSpeaking.current = true;
+
 				await AudioManager.setAudioSessionOptions({
 					iosCategory: "playAndRecord",
-					iosMode: "default",
+					iosMode: "voiceChat",
 					iosOptions: [],
 				});
 
-				audioCtx.current = new AudioContext({
-					sampleRate: SAMPLE_RATE,
-				});
+				const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+				audioCtx.current = ctx;
+
+				const gain = ctx.createGain();
+				gain.connect(ctx.destination);
+				gainNode.current = gain;
 
 				recorder.current = new AudioRecorder();
 				recorder.current.onAudioReady(
@@ -115,9 +137,19 @@ export function useVoiceSession() {
 						channelCount: 1,
 					},
 					({ buffer, numFrames }) => {
+						const channelData = buffer.getChannelData(0);
+
+						if (aiSpeaking.current) {
+							const rms = computeRMS(channelData, numFrames);
+							if (rms < ENERGY_THRESHOLD) return;
+							// User is speaking over the AI (barge-in) —
+							// silence playback so only the user's voice matters.
+							if (gainNode.current) {
+								gainNode.current.gain.value = 0;
+							}
+						}
+
 						if (ws.current?.readyState === WebSocket.OPEN) {
-							console.log("enter");
-							const channelData = buffer.getChannelData(0);
 							const pcm = float32ToInt16Buffer(
 								channelData,
 								numFrames,
@@ -133,7 +165,6 @@ export function useVoiceSession() {
 				socket.binaryType = "arraybuffer";
 
 				socket.onopen = () => {
-					console.log("WebSocket connected");
 					socket.send(
 						JSON.stringify({
 							type: "session_start",
@@ -145,19 +176,33 @@ export function useVoiceSession() {
 				};
 
 				socket.onmessage = (evt) => {
-					console.log("Received message:", evt.data);
 					if (typeof evt.data === "string") {
 						const msg = JSON.parse(evt.data);
-						if (msg.type === "transcript") {
+						if (msg.type === "ai_audio_start") {
+							aiSpeaking.current = true;
+							if (echoSettleTimer.current) {
+								clearTimeout(echoSettleTimer.current);
+								echoSettleTimer.current = null;
+							}
+							if (gainNode.current) {
+								gainNode.current.gain.value = 1;
+							}
+							nextPlayTime.current = 0;
+							setStep("speaking");
+						} else if (msg.type === "ai_audio_end") {
+							echoSettleTimer.current = setTimeout(() => {
+								aiSpeaking.current = false;
+								if (gainNode.current) {
+									gainNode.current.gain.value = 1;
+								}
+								nextPlayTime.current = 0;
+								setStep("listening");
+							}, 200);
+						} else if (msg.type === "transcript") {
 							setTranscripts((prev) => [
 								...prev,
 								{ role: msg.role, text: msg.text },
 							]);
-							if (msg.role === "ASSISTANT") {
-								setStep("speaking");
-							} else if (msg.role === "USER") {
-								setStep("listening");
-							}
 						} else if (msg.type === "error") {
 							setError(msg.message);
 							setStep("error");
@@ -184,7 +229,7 @@ export function useVoiceSession() {
 				setStep("error");
 			}
 		},
-		[],
+		[float32ToInt16Buffer, playPcmChunk],
 	);
 
 	const startMic = useCallback(async () => {
@@ -199,12 +244,15 @@ export function useVoiceSession() {
 		if (result?.status === "error") {
 			setError(result.message);
 			setStep("error");
-			return;
 		}
-		setStep("listening");
 	}, []);
 
 	const disconnect = useCallback(() => {
+		if (echoSettleTimer.current) {
+			clearTimeout(echoSettleTimer.current);
+			echoSettleTimer.current = null;
+		}
+		aiSpeaking.current = true;
 		recorder.current?.clearOnAudioReady();
 		recorder.current?.stop();
 		AudioManager.setAudioSessionActivity(false);
@@ -214,6 +262,7 @@ export function useVoiceSession() {
 		ws.current?.close();
 		ws.current = null;
 		audioCtx.current = null;
+		gainNode.current = null;
 		recorder.current = null;
 		setStep("idle");
 	}, []);
