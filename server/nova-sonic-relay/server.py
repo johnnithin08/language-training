@@ -19,7 +19,13 @@ import jwt as pyjwt
 import numpy as np
 import requests as http_requests
 from aiohttp import web
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import (
+    MediaStreamTrack,
+    RTCConfiguration,
+    RTCIceServer,
+    RTCPeerConnection,
+    RTCSessionDescription,
+)
 from av import AudioFrame
 from jwt.algorithms import RSAAlgorithm
 
@@ -359,7 +365,17 @@ class VoiceSession:
     async def _setup_webrtc(self, sdp: str):
         try:
             servers = await get_ice_servers()
-            self.pc = RTCPeerConnection(configuration={"iceServers": servers})
+            ice_servers = [
+                RTCIceServer(
+                    urls=s["urls"],
+                    username=s.get("username", ""),
+                    credential=s.get("credential", ""),
+                )
+                for s in servers
+            ]
+            self.pc = RTCPeerConnection(
+                configuration=RTCConfiguration(iceServers=ice_servers)
+            )
             self.pc.addTrack(self.ai_track)
 
             @self.pc.on("track")
