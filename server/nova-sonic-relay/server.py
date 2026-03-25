@@ -33,11 +33,7 @@ from aws_sdk_bedrock_runtime.client import (
     BedrockRuntimeClient,
     InvokeModelWithBidirectionalStreamOperationInput,
 )
-from aws_sdk_bedrock_runtime.config import (
-    Config,
-    HTTPAuthSchemeResolver,
-    SigV4AuthScheme,
-)
+from aws_sdk_bedrock_runtime.config import Config
 from aws_sdk_bedrock_runtime.models import (
     BidirectionalInputPayloadPart,
     InvokeModelWithBidirectionalStreamInputChunk,
@@ -223,8 +219,6 @@ def create_bedrock_client() -> BedrockRuntimeClient:
             endpoint_uri=f"https://bedrock-runtime.{BEDROCK_REGION}.amazonaws.com",
             region=BEDROCK_REGION,
             aws_credentials_identity_resolver=EnvironmentCredentialsResolver(),
-            http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
-            http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")},
         )
     )
 
