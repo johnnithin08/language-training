@@ -371,21 +371,36 @@ wss.on("connection", (clientWs) => {
 		aiTranscripts.length = 0;
 	}
 
+	const FRAMES_PER_PUSH = 160;
+	let outputBuffer = new Int16Array(0);
+
 	function pushAudioToClient(pcmBase64) {
 		if (!audioSource) return;
 		const pcm = Buffer.from(pcmBase64, "base64");
-		const samples = new Int16Array(
+		const newSamples = new Int16Array(
 			pcm.buffer,
 			pcm.byteOffset,
 			pcm.length / 2,
 		);
-		audioSource.onData({
-			samples,
-			sampleRate: 16000,
-			bitsPerSample: 16,
-			channelCount: 1,
-			numberOfFrames: samples.length,
-		});
+
+		const combined = new Int16Array(outputBuffer.length + newSamples.length);
+		combined.set(outputBuffer);
+		combined.set(newSamples, outputBuffer.length);
+
+		let offset = 0;
+		while (offset + FRAMES_PER_PUSH <= combined.length) {
+			const chunk = combined.slice(offset, offset + FRAMES_PER_PUSH);
+			audioSource.onData({
+				samples: chunk,
+				sampleRate: 16000,
+				bitsPerSample: 16,
+				channelCount: 1,
+				numberOfFrames: FRAMES_PER_PUSH,
+			});
+			offset += FRAMES_PER_PUSH;
+		}
+
+		outputBuffer = combined.slice(offset);
 	}
 
 	async function* generateInputStream() {
