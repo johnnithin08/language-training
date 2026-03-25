@@ -224,7 +224,7 @@ def create_bedrock_client() -> BedrockRuntimeClient:
             region=BEDROCK_REGION,
             aws_credentials_identity_resolver=EnvironmentCredentialsResolver(),
             http_auth_scheme_resolver=HTTPAuthSchemeResolver(),
-            http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme()},
+            http_auth_schemes={"aws.auth#sigv4": SigV4AuthScheme(service="bedrock")},
         )
     )
 
