@@ -36,7 +36,7 @@ from aws_sdk_bedrock_runtime.models import (
     BidirectionalInputPayloadPart,
     InvokeModelWithBidirectionalStreamInputChunk,
 )
-from smithy_aws_core.credentials_resolvers.environment import (
+from smithy_aws_core.identity.environment import (
     EnvironmentCredentialsResolver,
 )
 
