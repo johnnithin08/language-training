@@ -7,9 +7,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.750.0",
+    "@aws-sdk/client-kinesis-video": "^3.1017.0",
+    "@aws-sdk/client-kinesis-video-signaling": "^3.1017.0",
     "@smithy/node-http-handler": "^3.0.0",
     "jsonwebtoken": "^9.0.0",
     "jwks-rsa": "^3.1.0",
+    "wrtc": "^0.4.7",
     "ws": "^8.18.0"
   }
 }

@@ -5,6 +5,7 @@ import { type AssistantMessage, getAssistantReply } from "./assistant-reply";
 export type SessionAnalysisScores = {
 	grammar: number;
 	fluency: number;
+	pronunciation: number;
 	vocabulary: number;
 	coherence: number;
 	overall: number;
@@ -258,6 +259,7 @@ function asSessionAnalysis(value: unknown): SessionAnalysis | null {
 		scores: {
 			grammar: Number(s.grammar) || 0,
 			fluency: Number(s.fluency) || 0,
+			pronunciation: Number(s.pronunciation) || 0,
 			vocabulary: Number(s.vocabulary) || 0,
 			coherence: Number(s.coherence) || 0,
 			overall: Number(s.overall) || 0,

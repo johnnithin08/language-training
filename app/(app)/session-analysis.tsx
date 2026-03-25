@@ -32,6 +32,7 @@ const CEFR_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 const BAR_COLORS = {
 	grammar: "#a855f7",
 	fluency: "#2dd4bf",
+	pronunciation: "#f472b6",
 	vocabulary: "#fb923c",
 	coherence: "#818cf8",
 } as const;
@@ -301,6 +302,11 @@ export default function SessionAnalysisScreen() {
 						label="Fluency"
 						score={scores.fluency}
 						color={BAR_COLORS.fluency}
+					/>
+					<ScoreBar
+						label="Pronunciation"
+						score={scores.pronunciation}
+						color={BAR_COLORS.pronunciation}
 					/>
 					<ScoreBar
 						label="Vocabulary"

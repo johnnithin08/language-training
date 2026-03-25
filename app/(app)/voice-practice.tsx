@@ -1,19 +1,46 @@
 import { app, colors, white } from "@/constants/colors";
 import { getCategoryDisplayLabel } from "@/constants/conversationCategoryConfig";
 import { useAuth } from "@/contexts/auth";
-import { useVoiceSession } from "@/hooks/useVoiceSession";
+import {
+	useVoiceSession,
+	type VoiceSessionAnalysis,
+} from "@/hooks/useVoiceSession";
+import { saveSession, type SessionAnalysis } from "@/services/session";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
 	ActivityIndicator,
+	Alert,
 	Pressable,
 	StyleSheet,
 	Text,
 	View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+function toSessionAnalysis(va: VoiceSessionAnalysis): SessionAnalysis {
+	return {
+		scores: {
+			grammar: va.scores.grammar ?? 0,
+			fluency: va.scores.fluency ?? 0,
+			pronunciation: va.scores.pronunciation ?? 0,
+			vocabulary: va.scores.vocabulary ?? 0,
+			coherence: va.scores.coherence ?? 0,
+			overall: va.scores.overall ?? 0,
+		},
+		cefr_level: va.cefr_level ?? "",
+		strengths: va.strengths ?? [],
+		weaknesses: va.weaknesses ?? [],
+		common_mistakes: va.common_mistakes ?? [],
+		corrected_examples: (va.corrected_examples ?? []).map((e) => ({
+			original: String(e.original ?? ""),
+			corrected: String(e.corrected ?? ""),
+		})),
+		suggestions: va.suggestions ?? [],
+	};
+}
 
 export default function VoicePracticeScreen() {
 	const router = useRouter();
@@ -24,11 +51,10 @@ export default function VoicePracticeScreen() {
 	const { userData } = useAuth();
 	const insets = useSafeAreaInsets();
 
-	const { step, transcripts, error, connect, disconnect } = useVoiceSession();
-	const [isEndingSession, setIsEndingSession] = useState(false);
+	const { step, transcripts, error, analysis, connect, disconnect } =
+		useVoiceSession();
 	const started = useRef(false);
-
-	console.log("step", step);
+	const savedRef = useRef(false);
 
 	useEffect(() => {
 		if (started.current) return;
@@ -42,10 +68,6 @@ export default function VoicePracticeScreen() {
 			`Topic: ${category}. ` +
 			`Keep replies concise and natural for spoken conversation. ` +
 			`Gently correct mistakes. Start by greeting the learner and introducing the topic.`;
-		console.log(
-			"Connecting voice session with system prompt:",
-			systemPrompt,
-		);
 		void connect({ voiceId: voiceId ?? "tiffany", systemPrompt });
 	}, [connect, categoryId, voiceId, userData?.currentLevel]);
 
@@ -55,37 +77,70 @@ export default function VoicePracticeScreen() {
 		};
 	}, [disconnect]);
 
+	useEffect(() => {
+		if (!analysis || savedRef.current) return;
+		savedRef.current = true;
+
+		const persist = async () => {
+			try {
+				const sessionId = await saveSession({
+					categoryId: categoryId ?? "free-talk",
+					targetLanguage: userData?.targetLanguage ?? "English",
+					analysis: toSessionAnalysis(analysis),
+				});
+				router.replace({
+					pathname: "/(app)/session-analysis",
+					params: { sessionId },
+				});
+			} catch (e) {
+				const msg =
+					e instanceof Error
+						? e.message
+						: "Could not save this session.";
+				Alert.alert("Session", msg);
+				router.replace("/(app)");
+			}
+		};
+		persist();
+	}, [analysis, categoryId, userData?.targetLanguage, router]);
+
 	const statusTitle = useMemo(() => {
-		if (isEndingSession) return "Ending session";
+		if (step === "analyzing") return "Analyzing...";
 		if (step === "connecting") return "Connecting...";
 		if (step === "listening") return "Listening...";
 		if (step === "speaking") return "Speaking...";
 		if (step === "error") return "Something went wrong";
 		return "Waiting...";
-	}, [step, isEndingSession]);
+	}, [step]);
 
 	const statusSubtitle = useMemo(() => {
-		if (isEndingSession) return "Wrapping up your voice practice";
+		if (step === "analyzing") return "Reviewing your performance";
 		if (step === "connecting") return "Setting up voice session";
 		if (step === "listening") return "Say hello to start the conversation";
 		if (step === "speaking") return "AI is responding";
 		if (step === "error") return error ?? "Connection error";
 		return "Getting ready";
-	}, [step, error, isEndingSession]);
+	}, [step, error]);
 
 	const helperText = useMemo(() => {
-		if (isEndingSession) return "Almost done";
+		if (step === "analyzing") return "This may take a moment";
 		if (step === "connecting") return "Hang tight";
 		if (step === "speaking") return "Listen carefully";
 		return "Speak naturally - No pressure";
-	}, [step, isEndingSession]);
+	}, [step]);
+
+	const isSessionActive =
+		step === "listening" || step === "speaking";
 
 	const handleEndSession = useCallback(() => {
-		if (isEndingSession) return;
-		setIsEndingSession(true);
 		disconnect();
-		router.replace("/(app)");
-	}, [isEndingSession, disconnect, router]);
+	}, [disconnect]);
+
+	const iconName = useMemo(() => {
+		if (step === "speaking") return "volume-high-outline" as const;
+		if (step === "analyzing") return "analytics-outline" as const;
+		return "mic-outline" as const;
+	}, [step]);
 
 	return (
 		<View
@@ -99,31 +154,33 @@ export default function VoicePracticeScreen() {
 				},
 			]}
 		>
-			<Pressable
-				style={styles.closeButton}
-				onPress={() => {
-					disconnect();
-					router.back();
-				}}
-				hitSlop={10}
-			>
-				<Ionicons name="close" size={24} color={white} />
-			</Pressable>
+			{step !== "analyzing" && (
+				<Pressable
+					style={styles.closeButton}
+					onPress={() => {
+						disconnect();
+						router.back();
+					}}
+					hitSlop={10}
+				>
+					<Ionicons name="close" size={24} color={white} />
+				</Pressable>
+			)}
 
 			<View style={styles.content}>
 				<LinearGradient
 					colors={[...app.iconGradient]}
 					style={styles.micGradient}
 				>
-					<Ionicons
-						name={
-							step === "speaking"
-								? "volume-high-outline"
-								: "mic-outline"
-						}
-						size={54}
-						color={white}
-					/>
+					{step === "analyzing" ? (
+						<ActivityIndicator size="large" color={white} />
+					) : (
+						<Ionicons
+							name={iconName}
+							size={54}
+							color={white}
+						/>
+					)}
 				</LinearGradient>
 
 				<Text style={styles.title}>{statusTitle}</Text>
@@ -133,30 +190,34 @@ export default function VoicePracticeScreen() {
 					{getCategoryDisplayLabel(categoryId)}
 				</Text>
 
-				<View style={styles.waveWrap}>
-					<View style={[styles.waveBar, { height: 18 }]} />
-					<View style={[styles.waveBar, { height: 26 }]} />
-					<View style={[styles.waveBar, { height: 14 }]} />
-					<View style={[styles.waveBar, { height: 34 }]} />
-					<View style={[styles.waveBar, { height: 22 }]} />
-				</View>
+				{step !== "analyzing" && (
+					<View style={styles.waveWrap}>
+						<View style={[styles.waveBar, { height: 18 }]} />
+						<View style={[styles.waveBar, { height: 26 }]} />
+						<View style={[styles.waveBar, { height: 14 }]} />
+						<View style={[styles.waveBar, { height: 34 }]} />
+						<View style={[styles.waveBar, { height: 22 }]} />
+					</View>
+				)}
 			</View>
 
-			<Pressable
-				style={({ pressed }) => [
-					styles.endButton,
-					pressed && styles.endButtonPressed,
-					isEndingSession && styles.endButtonDisabled,
-				]}
-				onPress={handleEndSession}
-				disabled={isEndingSession}
-			>
-				{isEndingSession ? (
-					<ActivityIndicator color={white} />
-				) : (
+			{isSessionActive && (
+				<Pressable
+					style={({ pressed }) => [
+						styles.endButton,
+						pressed && styles.endButtonPressed,
+					]}
+					onPress={handleEndSession}
+				>
 					<Text style={styles.endButtonText}>End Session</Text>
-				)}
-			</Pressable>
+				</Pressable>
+			)}
+
+			{step === "analyzing" && (
+				<View style={styles.endButton}>
+					<ActivityIndicator color={white} />
+				</View>
+			)}
 		</View>
 	);
 }
@@ -231,9 +292,6 @@ const styles = StyleSheet.create({
 	},
 	endButtonPressed: {
 		opacity: 0.9,
-	},
-	endButtonDisabled: {
-		opacity: 0.75,
 	},
 	endButtonText: {
 		color: white,
