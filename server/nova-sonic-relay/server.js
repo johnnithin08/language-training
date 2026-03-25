@@ -174,6 +174,9 @@ wss.on("connection", (clientWs) => {
 		"You are a friendly language practice partner. " +
 		"Keep replies concise and natural for spoken conversation.";
 	let voiceId = "tiffany";
+	let aiSpeaking = false;
+	let skipAiAudio = false;
+	let echoSettleTimer = null;
 
 	clientWs.on("message", async (data, isBinary) => {
 		if (isBinary) return;
@@ -262,6 +265,16 @@ wss.on("connection", (clientWs) => {
 					if (!active) return;
 
 					const { samples, sampleRate, channelCount } = audioData;
+
+					if (aiSpeaking) {
+						const silenceFrames = Math.floor(samples.length / (sampleRate / 16000));
+						const silence = new Int16Array(silenceFrames);
+						const silenceBuf = Buffer.from(silence.buffer);
+						audioQueue.push(silenceBuf.toString("base64"));
+						if (resolveAudio) resolveAudio();
+						frameCount++;
+						return;
+					}
 
 					let pcm16k;
 					if (sampleRate === 48000) {
@@ -563,12 +576,20 @@ wss.on("connection", (clientWs) => {
 							assistantAudioContentNames.add(
 								evt.contentStart.contentName,
 							);
+							aiSpeaking = true;
+							skipAiAudio = false;
+							if (echoSettleTimer) {
+								clearTimeout(echoSettleTimer);
+								echoSettleTimer = null;
+							}
 							clientWs.send(
 								JSON.stringify({ type: "ai_audio_start" }),
 							);
 						}
 					} else if (evt.audioOutput) {
-						pushAudioToClient(evt.audioOutput.content);
+						if (!skipAiAudio) {
+							pushAudioToClient(evt.audioOutput.content);
+						}
 					} else if (evt.textOutput) {
 						const transcript = {
 							role: evt.textOutput.role,
@@ -583,17 +604,28 @@ wss.on("connection", (clientWs) => {
 						aiTranscripts.push(transcript);
 					} else if (evt.contentEnd) {
 						const cn = evt.contentEnd.contentName;
-						if (assistantAudioContentNames.has(cn)) {
+						if (evt.contentEnd.stopReason === "INTERRUPTED") {
+							console.log("User barge-in detected");
+							skipAiAudio = true;
+							aiSpeaking = false;
+							if (echoSettleTimer) {
+								clearTimeout(echoSettleTimer);
+								echoSettleTimer = null;
+							}
+							outputBuffer = new Int16Array(0);
+							clientWs.send(
+								JSON.stringify({ type: "barge_in" }),
+							);
+						} else if (assistantAudioContentNames.has(cn)) {
 							assistantAudioContentNames.delete(cn);
 							clientWs.send(
 								JSON.stringify({ type: "ai_audio_end" }),
 							);
-						}
-						if (evt.contentEnd.stopReason === "INTERRUPTED") {
-							console.log("User barge-in detected");
-							clientWs.send(
-								JSON.stringify({ type: "barge_in" }),
-							);
+							echoSettleTimer = setTimeout(() => {
+								aiSpeaking = false;
+								echoSettleTimer = null;
+								console.log("Mic unmuted after echo settle");
+							}, 600);
 						}
 					}
 				} else if (event.modelStreamErrorException) {

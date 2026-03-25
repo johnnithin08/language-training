@@ -1,9 +1,9 @@
 import { fetchAuthSession } from "aws-amplify/auth";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+	RTCIceCandidate,
 	RTCPeerConnection,
 	RTCSessionDescription,
-	RTCIceCandidate,
 	mediaDevices,
 	type MediaStream as RNMediaStream,
 } from "react-native-webrtc";
@@ -148,10 +148,7 @@ export function useVoiceSession() {
 		[],
 	);
 
-	async function setupWebRTC(
-		socket: WebSocket,
-		iceServers: RTCIceServer[],
-	) {
+	async function setupWebRTC(socket: WebSocket, iceServers: RTCIceServer[]) {
 		try {
 			const stream = (await mediaDevices.getUserMedia({
 				audio: true,
