@@ -420,7 +420,19 @@ class VoiceSession:
             if arr.dtype != np.int16:
                 arr = (arr * 32767).clip(-32768, 32767).astype(np.int16)
 
-            mono = arr.mean(axis=0).astype(np.int16) if arr.shape[0] > 1 else arr[0]
+            channels = len(frame.layout.channels)
+            if channels > 1 and arr.shape[0] == 1:
+                # Packed/interleaved stereo: [L0,R0,L1,R1,...] in shape (1, N*ch)
+                flat = arr[0]
+                acc = np.zeros(len(flat) // channels, dtype=np.int32)
+                for ch in range(channels):
+                    acc += flat[ch::channels].astype(np.int32)
+                mono = (acc // channels).astype(np.int16)
+            elif arr.shape[0] > 1:
+                # Planar stereo: shape (ch, N)
+                mono = arr.mean(axis=0).astype(np.int16)
+            else:
+                mono = arr[0]
             pcm = downsample(mono, frame.sample_rate, 16000)
             raw = pcm.tobytes()
 
