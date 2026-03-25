@@ -261,8 +261,29 @@ wss.on("connection", (clientWs) => {
 				sink.ondata = (audioData) => {
 					if (!active) return;
 
-					const { samples } = audioData;
-					const pcmBuffer = Buffer.from(samples.buffer);
+					const { samples, sampleRate, channelCount } = audioData;
+
+					let pcm16k;
+					if (sampleRate === 48000) {
+						const mono =
+							channelCount === 2
+								? mixToMono(samples, channelCount)
+								: samples;
+						pcm16k = downsample(mono, sampleRate, 16000);
+					} else if (sampleRate === 16000) {
+						pcm16k =
+							channelCount === 2
+								? mixToMono(samples, channelCount)
+								: samples;
+					} else {
+						const mono =
+							channelCount === 2
+								? mixToMono(samples, channelCount)
+								: samples;
+						pcm16k = downsample(mono, sampleRate, 16000);
+					}
+
+					const pcmBuffer = Buffer.from(pcm16k.buffer, pcm16k.byteOffset, pcm16k.byteLength);
 
 					recordedChunks.push(pcmBuffer);
 
@@ -272,19 +293,21 @@ wss.on("connection", (clientWs) => {
 					frameCount++;
 					if (frameCount % 100 === 1) {
 						console.log(
-							`WebRTC audio: ${frameCount} frames (queue: ${audioQueue.length})`,
+							`WebRTC audio: ${frameCount} frames, src=${sampleRate}Hz ch=${channelCount} -> 16kHz mono (queue: ${audioQueue.length})`,
 						);
 					}
 				};
 			};
 
+			const pc = peerConnection;
 			peerConnection.onconnectionstatechange = () => {
+				if (!pc) return;
 				console.log(
 					"PeerConnection state:",
-					peerConnection.connectionState,
+					pc.connectionState,
 				);
 				if (
-					peerConnection.connectionState === "connected" &&
+					pc.connectionState === "connected" &&
 					!active
 				) {
 					startBedrockSession();
@@ -827,6 +850,29 @@ Return ONLY valid JSON (nothing else before or after):
   "corrected_examples": [],
   "suggestions": []
 }`;
+}
+
+function downsample(samples, fromRate, toRate) {
+	const ratio = fromRate / toRate;
+	const outLength = Math.floor(samples.length / ratio);
+	const out = new Int16Array(outLength);
+	for (let i = 0; i < outLength; i++) {
+		out[i] = samples[Math.floor(i * ratio)];
+	}
+	return out;
+}
+
+function mixToMono(samples, channelCount) {
+	const frames = samples.length / channelCount;
+	const mono = new Int16Array(frames);
+	for (let i = 0; i < frames; i++) {
+		let sum = 0;
+		for (let ch = 0; ch < channelCount; ch++) {
+			sum += samples[i * channelCount + ch];
+		}
+		mono[i] = Math.round(sum / channelCount);
+	}
+	return mono;
 }
 
 server.listen(PORT, () =>
