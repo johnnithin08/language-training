@@ -404,6 +404,11 @@ class VoiceSession:
 
     async def _ingest_audio(self, track: MediaStreamTrack):
         """Receive WebRTC audio frames, downsample to 16 kHz, feed to Nova Sonic."""
+        # Wait for Nova Sonic session to be ready
+        while not self.active:
+            await asyncio.sleep(0.05)
+        log.info("Audio ingestion started")
+
         n = 0
         while self.active:
             try:
