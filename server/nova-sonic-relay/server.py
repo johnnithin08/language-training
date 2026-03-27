@@ -573,6 +573,8 @@ class VoiceSession:
 
     async def _ns_audio_pump(self):
         """Forward client audio queue to Nova Sonic as base64 chunks."""
+        n = 0
+        log.info("Audio pump started")
         while self.active:
             try:
                 raw = await asyncio.wait_for(self._audio_q.get(), timeout=0.05)
@@ -592,11 +594,17 @@ class VoiceSession:
                         }
                     }
                 )
-            except Exception:
+                n += 1
+                if n <= 3 or n % 500 == 0:
+                    log.info("Sent audio chunk %d to Nova Sonic (%d bytes)", n, len(b64))
+            except Exception as e:
+                log.error("Audio pump send error: %s", e)
                 break
+        log.info("Audio pump exited (sent %d chunks)", n)
 
     async def _ns_event_loop(self):
         """Process Nova Sonic output: audio → AI track, text → WebSocket."""
+        log.info("Event loop started, waiting for Nova Sonic output...")
         while self.active:
             try:
                 output = await self._stream.await_output()
@@ -650,8 +658,11 @@ class VoiceSession:
 
             except Exception as e:
                 if self.active:
-                    log.error("NS recv: %s", e)
+                    log.error("NS recv error: %s", e)
+                    import traceback
+                    log.error("NS recv traceback: %s", traceback.format_exc())
                 break
+        log.info("Event loop exited")
 
     # ── End session / Analysis ────────────────────────────────────
 
