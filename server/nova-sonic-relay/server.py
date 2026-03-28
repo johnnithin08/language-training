@@ -756,14 +756,25 @@ class VoiceSession:
 
     async def _analyze(self) -> dict:
         """Hybrid analysis: Transcribe (pronunciation) + Nova Pro (full assessment)."""
+        log.info(
+            "Starting hybrid analysis: %d audio chunks, %d transcripts",
+            len(self._recorded), len(self._ai_transcripts),
+        )
+
+        log.info("Step 1/2: Running Amazon Transcribe…")
         pronunciation = await _run_transcribe(self._recorded)
         log.info(
-            "Transcribe: score=%d, words=%d, low_confidence=%d",
+            "Transcribe done: score=%d, words=%d, low_confidence=%d, transcript=%.200s",
             pronunciation["pronunciation_score"],
             pronunciation["word_count"],
             len(pronunciation["low_confidence_words"]),
+            pronunciation.get("transcript", ""),
         )
-        return await self._analyze_text_model(pronunciation)
+
+        log.info("Step 2/2: Running Nova Pro text analysis…")
+        result = await self._analyze_text_model(pronunciation)
+        log.info("Analysis complete: %s", list(result.keys()))
+        return result
 
     async def _analyze_text_model(self, pronunciation: dict) -> dict:
         """Use Bedrock Converse with pronunciation data from Transcribe."""
