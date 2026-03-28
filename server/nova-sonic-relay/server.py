@@ -734,12 +734,16 @@ class VoiceSession:
 
         try:
             analysis = await self._analyze()
+            log.info("Analysis result keys: %s", list(analysis.keys()) if analysis else "None")
             session_id = await self._save_session(analysis)
+            log.info("Session saved: %s", session_id)
             await self._ws_send(
                 {"type": "session_complete", "sessionId": session_id}
             )
         except Exception as e:
+            import traceback
             log.error("Analysis/save: %s", e)
+            log.error("Analysis/save traceback: %s", traceback.format_exc())
             await self._ws_send(
                 {"type": "error", "message": f"Analysis failed: {e}"}
             )
@@ -765,6 +769,11 @@ class VoiceSession:
         acn = str(uuid.uuid4())
         sys_text = _sonic_analysis_system_text(
             self._ai_transcripts, self.language_level
+        )
+
+        log.info(
+            "Analysis: stream opened, system text length=%d, transcripts=%d",
+            len(sys_text), len(self._ai_transcripts),
         )
 
         async def send(obj: dict):
@@ -885,13 +894,28 @@ class VoiceSession:
             if i % 5 == 4:
                 await asyncio.sleep(0.02)
 
-        log.info("Analysis: audio sent, closing input…")
-        await send(
-            {"event": {"contentEnd": {"promptName": pn, "contentName": acn}}}
-        )
-        await send({"event": {"promptEnd": {"promptName": pn}}})
+        log.info("Analysis: audio sent, sending contentEnd…")
+        try:
+            await send(
+                {"event": {"contentEnd": {"promptName": pn, "contentName": acn}}}
+            )
+            log.info("Analysis: contentEnd sent, sending promptEnd…")
+        except Exception as e:
+            log.error("Analysis: contentEnd send failed: %s", e)
+            raise
+
+        try:
+            await send({"event": {"promptEnd": {"promptName": pn}}})
+            log.info("Analysis: promptEnd sent, starting drain…")
+        except Exception as e:
+            log.error("Analysis: promptEnd send failed: %s", e)
+            raise
 
         full_text = await _drain_sonic_analysis_text(stream)
+        log.info(
+            "Analysis: drain complete, text length=%d, text=%.800s",
+            len(full_text), full_text,
+        )
 
         try:
             await send({"event": {"sessionEnd": {}}})
@@ -902,7 +926,6 @@ class VoiceSession:
         except Exception:
             pass
 
-        log.info("Sonic analysis assembled text: %s", full_text[:800])
         return _parse_analysis_json(full_text)
 
     async def _save_session(self, analysis: dict) -> str:
@@ -947,32 +970,52 @@ async def _drain_sonic_analysis_text(stream) -> str:
     all_text_parts: list[str] = []
     deadline = time.monotonic() + 180.0
     completion_seen = False
+    event_count = 0
+    timeout_count = 0
+
+    log.info("Drain: started, deadline in 180s")
 
     while time.monotonic() < deadline:
         try:
             wait = min(45.0, deadline - time.monotonic())
             if wait <= 0:
+                log.info("Drain: deadline reached")
                 break
             output = await asyncio.wait_for(stream.await_output(), timeout=wait)
             result = await output[1].receive()
         except StopAsyncIteration:
+            log.info("Drain: StopAsyncIteration (stream ended)")
             break
         except asyncio.TimeoutError:
+            timeout_count += 1
+            log.info(
+                "Drain: timeout #%d (completion_seen=%s)", timeout_count, completion_seen
+            )
             if completion_seen:
                 break
             continue
         except Exception as e:
-            log.warning("Sonic analysis drain: %s", e)
+            log.warning("Drain: exception: %s (type=%s)", e, type(e).__name__)
+            import traceback
+            log.warning("Drain: traceback: %s", traceback.format_exc())
             break
 
         if not (result.value and result.value.bytes_):
+            event_count += 1
+            log.debug("Drain: event #%d empty payload, skipping", event_count)
             continue
+
+        raw = result.value.bytes_.decode()
         try:
-            d = json.loads(result.value.bytes_.decode())
+            d = json.loads(raw)
         except json.JSONDecodeError:
+            log.warning("Drain: non-JSON payload: %.200s", raw)
             continue
 
         evt = d.get("event", {})
+        event_keys = list(evt.keys())
+        event_count += 1
+
         if "textOutput" in evt:
             to = evt["textOutput"]
             role = (to.get("role") or "").strip().upper()
@@ -980,8 +1023,33 @@ async def _drain_sonic_analysis_text(stream) -> str:
             all_text_parts.append(content)
             if role == "ASSISTANT":
                 assistant_parts.append(content)
+            log.info(
+                "Drain: event #%d textOutput role=%s len=%d preview=%.200s",
+                event_count, role, len(content), content,
+            )
+        elif "contentStart" in evt:
+            cs = evt["contentStart"]
+            log.info(
+                "Drain: event #%d contentStart type=%s role=%s",
+                event_count, cs.get("type"), cs.get("role"),
+            )
+        elif "contentEnd" in evt:
+            ce = evt["contentEnd"]
+            log.info(
+                "Drain: event #%d contentEnd stopReason=%s",
+                event_count, ce.get("stopReason"),
+            )
+        elif "completionEnd" in evt:
+            log.info("Drain: event #%d completionEnd", event_count)
+        elif "audioOutput" in evt:
+            if event_count <= 3 or event_count % 50 == 0:
+                log.info("Drain: event #%d audioOutput (ignoring)", event_count)
+        else:
+            log.info("Drain: event #%d keys=%s", event_count, event_keys)
+
         if "completionEnd" in evt:
             completion_seen = True
+            log.info("Drain: completionEnd seen, draining tail events…")
             tail_deadline = time.monotonic() + 12.0
             while time.monotonic() < tail_deadline:
                 try:
@@ -990,6 +1058,7 @@ async def _drain_sonic_analysis_text(stream) -> str:
                     )
                     result = await output[1].receive()
                 except (asyncio.TimeoutError, StopAsyncIteration, Exception):
+                    log.info("Drain: tail drain ended")
                     break
                 if not (result.value and result.value.bytes_):
                     continue
@@ -1005,12 +1074,18 @@ async def _drain_sonic_analysis_text(stream) -> str:
                     all_text_parts.append(content)
                     if role == "ASSISTANT":
                         assistant_parts.append(content)
+                    log.info("Drain: tail textOutput role=%s len=%d", role, len(content))
             break
 
+    log.info(
+        "Drain: finished — events=%d, assistant_parts=%d (%d chars), all_parts=%d (%d chars)",
+        event_count,
+        len(assistant_parts), sum(len(p) for p in assistant_parts),
+        len(all_text_parts), sum(len(p) for p in all_text_parts),
+    )
     merged = "".join(assistant_parts).strip()
     if merged:
         return merged
-    # Rare: model put JSON in a non-ASSISTANT textOutput
     return "".join(all_text_parts).strip()
 
 
