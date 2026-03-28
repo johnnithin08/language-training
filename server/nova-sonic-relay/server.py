@@ -79,6 +79,7 @@ BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 BEDROCK_TEXT_REGION = os.environ.get("BEDROCK_TEXT_REGION", "eu-west-2")
 KVS_REGION = os.environ.get("KVS_REGION", "eu-west-2")
 MODEL_ID = os.environ.get("MODEL_ID", "amazon.nova-sonic-v1:0")
+TEXT_MODEL_ID = os.environ.get("TEXT_MODEL_ID", "amazon.nova-pro-v1:0")
 PORT = int(os.environ.get("PORT", "8080"))
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID")
@@ -729,16 +730,18 @@ class VoiceSession:
 
         await self._ws_send({"type": "analyzing"})
 
-        # Let the CRT fully tear down the live stream before opening a new one
-        await asyncio.sleep(2)
-
         try:
-            analysis = await self._analyze()
+            analysis = await asyncio.wait_for(self._analyze(), timeout=60.0)
             log.info("Analysis result keys: %s", list(analysis.keys()) if analysis else "None")
             session_id = await self._save_session(analysis)
             log.info("Session saved: %s", session_id)
             await self._ws_send(
                 {"type": "session_complete", "sessionId": session_id}
+            )
+        except asyncio.TimeoutError:
+            log.error("Analysis timed out after 60s")
+            await self._ws_send(
+                {"type": "error", "message": "Analysis timed out"}
             )
         except Exception as e:
             import traceback
@@ -752,237 +755,102 @@ class VoiceSession:
         self._ai_transcripts.clear()
 
     async def _analyze(self) -> dict:
-        return await self._analyze_nova_sonic()
-
-    async def _analyze_nova_sonic(self) -> dict:
-        """Two-prompt analysis over a single Nova Sonic bidirectional stream.
-
-        Prompt 1  – system context + recorded user audio (interactive).
-                    The model processes pronunciation/fluency/audio features
-                    and emits transcriptions.  We consume them and move on.
-        Prompt 2  – a USER text turn asking the model to produce the JSON
-                    assessment.  The model retains audio context from prompt 1
-                    and generates ASSISTANT text with the analysis.
-        """
-        if not self._recorded:
-            raise ValueError("No audio recorded for Sonic analysis")
-
-        client = create_bedrock_client()
-        stream = await client.invoke_model_with_bidirectional_stream(
-            InvokeModelWithBidirectionalStreamOperationInput(model_id=MODEL_ID)
-        )
-
-        sys_text = _sonic_analysis_system_text(
-            self._ai_transcripts, self.language_level
-        )
+        """Hybrid analysis: Transcribe (pronunciation) + Nova Pro (full assessment)."""
+        pronunciation = await _run_transcribe(self._recorded)
         log.info(
-            "Analysis: stream opened, system text length=%d, transcripts=%d",
-            len(sys_text), len(self._ai_transcripts),
+            "Transcribe: score=%d, words=%d, low_confidence=%d",
+            pronunciation["pronunciation_score"],
+            pronunciation["word_count"],
+            len(pronunciation["low_confidence_words"]),
+        )
+        return await self._analyze_text_model(pronunciation)
+
+    async def _analyze_text_model(self, pronunciation: dict) -> dict:
+        """Use Bedrock Converse with pronunciation data from Transcribe."""
+        transcript_lines = "\n".join(
+            f"{t.get('role', 'USER')}: {t.get('text', '')}"
+            for t in self._ai_transcripts
+            if t.get("text", "").strip()
         )
 
-        async def send(obj: dict):
-            await stream.input_stream.send(
-                InvokeModelWithBidirectionalStreamInputChunk(
-                    value=BidirectionalInputPayloadPart(
-                        bytes_=json.dumps(obj).encode()
-                    )
-                )
+        level_ctx = ""
+        if self.language_level.strip():
+            level_ctx = (
+                f"\nLearner self-reported level: {self.language_level}. "
+                "Use for scoring context; evidence from the data "
+                "takes priority.\n"
             )
 
-        prompt_output_cfg = {
-            "textOutputConfiguration": {"mediaType": "text/plain"},
-            "audioOutputConfiguration": {
-                "mediaType": "audio/lpcm",
-                "sampleRateHertz": 16000,
-                "sampleSizeBits": 16,
-                "channelCount": 1,
-                "voiceId": self.voice_id,
-                "encoding": "base64",
-                "audioType": "SPEECH",
-            },
-        }
+        low_words = pronunciation.get("low_confidence_words", [])
+        pron_section = (
+            f"### PRONUNCIATION DATA (from audio analysis)\n"
+            f"Average pronunciation confidence: "
+            f"{pronunciation['pronunciation_score']}/100\n"
+            f"Total words analysed: {pronunciation['word_count']}\n"
+        )
+        if low_words:
+            pron_section += "Words with low clarity (possible pronunciation issues):\n"
+            for w in low_words[:15]:
+                pron_section += f"  - \"{w['word']}\" (confidence: {w['confidence']:.2f})\n"
 
-        await send(
-            {
-                "event": {
-                    "sessionStart": {
-                        "inferenceConfiguration": {
-                            "maxTokens": 4096,
-                            "topP": 0.9,
-                            "temperature": 0.2,
-                        }
-                    }
-                }
-            }
+        system_text = (
+            "You are an expert English language assessor. You will receive:\n"
+            "1. A transcript of a spoken practice conversation between a "
+            "language learner (USER) and an AI practice partner (ASSISTANT).\n"
+            "2. Pronunciation data from audio analysis with per-word "
+            "confidence scores (0-1 scale, lower = harder to recognise = "
+            "likely pronunciation issue).\n\n"
+            "Analyze ONLY the learner's turns. Use the pronunciation data "
+            "to score pronunciation accurately — low-confidence words indicate "
+            "the learner's speech was unclear or mispronounced.\n\n"
+            "Assess: grammar, fluency, pronunciation, vocabulary, coherence.\n\n"
+            "Respond with ONLY a valid JSON object — no markdown fences, "
+            "no explanation, no extra text.\n\n"
+            "JSON schema (scores are 0-100):\n"
+            "{\n"
+            '  "scores": {"grammar": 0, "fluency": 0, "pronunciation": 0, '
+            '"vocabulary": 0, "coherence": 0, "overall": 0},\n'
+            '  "cefr_level": "A1|A2|B1|B2|C1|C2",\n'
+            '  "strengths": ["..."],\n'
+            '  "weaknesses": ["..."],\n'
+            '  "common_mistakes": ["..."],\n'
+            '  "corrected_examples": ["..."],\n'
+            '  "suggestions": ["..."]\n'
+            "}"
         )
 
-        # ── Prompt 1: system context + user audio ─────────────────
-        pn1 = str(uuid.uuid4())
-        scn = str(uuid.uuid4())
-        acn = str(uuid.uuid4())
-
-        await send({"event": {"promptStart": {"promptName": pn1, **prompt_output_cfg}}})
-
-        await send(
-            {
-                "event": {
-                    "contentStart": {
-                        "promptName": pn1,
-                        "contentName": scn,
-                        "type": "TEXT",
-                        "interactive": False,
-                        "role": "SYSTEM",
-                        "textInputConfiguration": {"mediaType": "text/plain"},
-                    }
-                }
-            }
-        )
-        await send(
-            {"event": {"textInput": {"promptName": pn1, "contentName": scn, "content": sys_text}}}
-        )
-        await send({"event": {"contentEnd": {"promptName": pn1, "contentName": scn}}})
-
-        await send(
-            {
-                "event": {
-                    "contentStart": {
-                        "promptName": pn1,
-                        "contentName": acn,
-                        "type": "AUDIO",
-                        "interactive": True,
-                        "role": "USER",
-                        "audioInputConfiguration": {
-                            "mediaType": "audio/lpcm",
-                            "sampleRateHertz": 16000,
-                            "sampleSizeBits": 16,
-                            "channelCount": 1,
-                            "audioType": "SPEECH",
-                            "encoding": "base64",
-                        },
-                    }
-                }
-            }
+        user_text = (
+            f"### CONVERSATION TRANSCRIPT\n"
+            f"{transcript_lines or '(no learner speech detected)'}\n"
+            f"{level_ctx}\n"
+            f"{pron_section}\n"
+            f"Provide the JSON assessment."
         )
 
-        log.info("Analysis P1: sending %d recorded audio chunks…", len(self._recorded))
-        for i, chunk in enumerate(self._recorded):
-            try:
-                await send(
-                    {
-                        "event": {
-                            "audioInput": {
-                                "promptName": pn1,
-                                "contentName": acn,
-                                "content": base64.b64encode(chunk).decode(),
-                            }
-                        }
-                    }
-                )
-            except Exception as e:
-                log.error("Analysis P1: audio send error at chunk %d: %s", i, e)
-                break
-            if i % 5 == 4:
-                await asyncio.sleep(0.02)
-
-        log.info("Analysis P1: audio sent, closing content + prompt…")
-        await send({"event": {"contentEnd": {"promptName": pn1, "contentName": acn}}})
-        await send({"event": {"promptEnd": {"promptName": pn1}}})
-
-        log.info("Analysis P1: draining transcription events…")
-        await _drain_until_completion(stream)
-        log.info("Analysis P1: transcription complete")
-
-        # ── Prompt 2: request the JSON analysis ───────────────────
-        pn2 = str(uuid.uuid4())
-        scn2 = str(uuid.uuid4())
-        tcn = str(uuid.uuid4())
-
-        await send({"event": {"promptStart": {"promptName": pn2, **prompt_output_cfg}}})
-
-        await send(
-            {
-                "event": {
-                    "contentStart": {
-                        "promptName": pn2,
-                        "contentName": scn2,
-                        "type": "TEXT",
-                        "interactive": False,
-                        "role": "SYSTEM",
-                        "textInputConfiguration": {"mediaType": "text/plain"},
-                    }
-                }
-            }
-        )
-        await send(
-            {
-                "event": {
-                    "textInput": {
-                        "promptName": pn2,
-                        "contentName": scn2,
-                        "content": (
-                            "You just listened to a language learner's spoken audio. "
-                            "Assess their pronunciation quality (based on the sound "
-                            "you heard), grammar, fluency, vocabulary, and coherence. "
-                            "You MUST respond with ONLY a single JSON object in your "
-                            "ASSISTANT text output — no markdown fences, no preamble, "
-                            "no conversational filler, no spoken audio response.\n\n"
-                            "JSON schema:\n"
-                            '{"scores":{"grammar":0,"fluency":0,"pronunciation":0,'
-                            '"vocabulary":0,"coherence":0,"overall":0},'
-                            '"cefr_level":"B1","strengths":[],"weaknesses":[],'
-                            '"common_mistakes":[],"corrected_examples":[],"suggestions":[]}'
-                        ),
-                    }
-                }
-            }
-        )
-        await send({"event": {"contentEnd": {"promptName": pn2, "contentName": scn2}}})
-
-        await send(
-            {
-                "event": {
-                    "contentStart": {
-                        "promptName": pn2,
-                        "contentName": tcn,
-                        "type": "TEXT",
-                        "interactive": True,
-                        "role": "USER",
-                        "textInputConfiguration": {"mediaType": "text/plain"},
-                    }
-                }
-            }
-        )
-        await send(
-            {
-                "event": {
-                    "textInput": {
-                        "promptName": pn2,
-                        "contentName": tcn,
-                        "content": "Provide the JSON assessment now.",
-                    }
-                }
-            }
-        )
-        await send({"event": {"contentEnd": {"promptName": pn2, "contentName": tcn}}})
-        await send({"event": {"promptEnd": {"promptName": pn2}}})
-        log.info("Analysis P2: prompt sent, draining analysis…")
-
-        full_text = await _drain_sonic_analysis_text(stream)
         log.info(
-            "Analysis P2: drain complete, text length=%d, text=%.800s",
-            len(full_text), full_text,
+            "Text model analysis: %d transcript lines, model=%s",
+            len(self._ai_transcripts), TEXT_MODEL_ID,
         )
 
-        try:
-            await send({"event": {"sessionEnd": {}}})
-        except Exception:
-            pass
-        try:
-            await stream.input_stream.close()
-        except Exception:
-            pass
+        bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_TEXT_REGION)
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: bedrock.converse(
+                modelId=TEXT_MODEL_ID,
+                system=[{"text": system_text}],
+                messages=[{"role": "user", "content": [{"text": user_text}]}],
+                inferenceConfig={
+                    "maxTokens": 4096,
+                    "temperature": 0.2,
+                    "topP": 0.9,
+                },
+            ),
+        )
 
-        return _parse_analysis_json(full_text)
+        output_text = response["output"]["message"]["content"][0]["text"]
+        log.info("Text model response: %.800s", output_text)
+        return _parse_analysis_json(output_text)
 
     async def _save_session(self, analysis: dict) -> str:
         """Write session + analysis to DynamoDB and return the session id."""
@@ -1013,53 +881,6 @@ class VoiceSession:
 # ── Analysis helpers ──────────────────────────────────────────────
 
 
-async def _drain_until_completion(stream):
-    """Consume all output events from a Nova Sonic stream until completionEnd.
-
-    Used after prompt 1 (audio processing) to flush transcription events
-    before starting prompt 2 (analysis request).
-    """
-    event_count = 0
-    deadline = time.monotonic() + 120.0
-    while time.monotonic() < deadline:
-        try:
-            wait = min(30.0, deadline - time.monotonic())
-            if wait <= 0:
-                break
-            output = await asyncio.wait_for(stream.await_output(), timeout=wait)
-            result = await output[1].receive()
-        except (StopAsyncIteration, asyncio.TimeoutError):
-            log.info("P1 drain: stop/timeout after %d events", event_count)
-            break
-        except Exception as e:
-            log.warning("P1 drain: exception after %d events: %s", event_count, e)
-            break
-
-        event_count += 1
-        if result is None or not (result.value and result.value.bytes_):
-            continue
-
-        try:
-            d = json.loads(result.value.bytes_.decode())
-        except json.JSONDecodeError:
-            continue
-
-        evt = d.get("event", {})
-        if "textOutput" in evt:
-            to = evt["textOutput"]
-            log.info(
-                "P1 drain: event #%d textOutput role=%s preview=%.80s",
-                event_count, to.get("role", ""), to.get("content", ""),
-            )
-        elif "completionEnd" in evt:
-            log.info("P1 drain: completionEnd after %d events", event_count)
-            return
-        elif event_count <= 5:
-            log.info("P1 drain: event #%d keys=%s", event_count, list(evt.keys()))
-
-    log.warning("P1 drain: exited without completionEnd (%d events)", event_count)
-
-
 def _parse_analysis_json(text: str) -> dict:
     i, j = text.find("{"), text.rfind("}")
     if i == -1 or j == -1 or j <= i:
@@ -1067,165 +888,84 @@ def _parse_analysis_json(text: str) -> dict:
     return json.loads(text[i : j + 1])
 
 
-async def _drain_sonic_analysis_text(stream) -> str:
-    """Collect ASSISTANT textOutput from a Nova Sonic stream until completionEnd."""
-    assistant_parts: list[str] = []
-    all_text_parts: list[str] = []
-    deadline = time.monotonic() + 180.0
-    completion_seen = False
-    event_count = 0
-    timeout_count = 0
+async def _run_transcribe(recorded: list[bytes]) -> dict:
+    """Stream recorded 16 kHz mono PCM through Amazon Transcribe.
 
-    log.info("Drain: started, deadline in 180s")
+    Returns word-level confidence scores and a pronunciation score
+    derived from how confidently Transcribe recognised each word
+    (lower confidence ≈ unclear pronunciation).
+    """
+    from amazon_transcribe.client import TranscribeStreamingClient
+    from amazon_transcribe.model import TranscriptEvent
 
-    while time.monotonic() < deadline:
-        try:
-            wait = min(45.0, deadline - time.monotonic())
-            if wait <= 0:
-                log.info("Drain: deadline reached")
-                break
-            output = await asyncio.wait_for(stream.await_output(), timeout=wait)
-            result = await output[1].receive()
-        except StopAsyncIteration:
-            log.info("Drain: StopAsyncIteration (stream ended)")
-            break
-        except asyncio.TimeoutError:
-            timeout_count += 1
-            log.info(
-                "Drain: timeout #%d (completion_seen=%s)", timeout_count, completion_seen
-            )
-            if completion_seen:
-                break
-            continue
-        except Exception as e:
-            log.warning("Drain: exception: %s (type=%s)", e, type(e).__name__)
-            import traceback
-            log.warning("Drain: traceback: %s", traceback.format_exc())
-            break
+    client = TranscribeStreamingClient(region=BEDROCK_TEXT_REGION)
 
-        if result is None or not (result.value and result.value.bytes_):
-            event_count += 1
-            log.debug("Drain: event #%d empty/None payload, skipping", event_count)
-            continue
+    stream = await client.start_stream_transcription(
+        language_code="en-US",
+        media_sample_rate_hz=16000,
+        media_encoding="pcm",
+    )
 
-        raw = result.value.bytes_.decode()
-        try:
-            d = json.loads(raw)
-        except json.JSONDecodeError:
-            log.warning("Drain: non-JSON payload: %.200s", raw)
-            continue
+    words: list[dict] = []
+    transcript_parts: list[str] = []
 
-        evt = d.get("event", {})
-        event_keys = list(evt.keys())
-        event_count += 1
+    async def _send():
+        CHUNK = 3200  # 100 ms of 16 kHz 16-bit mono
+        buf = b""
+        for raw in recorded:
+            buf += raw
+            while len(buf) >= CHUNK:
+                await stream.input_stream.send_audio_event(audio_chunk=buf[:CHUNK])
+                buf = buf[CHUNK:]
+                await asyncio.sleep(0.005)
+        if buf:
+            await stream.input_stream.send_audio_event(audio_chunk=buf)
+        await stream.input_stream.end_stream()
 
-        if "textOutput" in evt:
-            to = evt["textOutput"]
-            role = (to.get("role") or "").strip().upper()
-            content = to.get("content") or ""
-            all_text_parts.append(content)
-            if role == "ASSISTANT":
-                assistant_parts.append(content)
-            log.info(
-                "Drain: event #%d textOutput role=%s len=%d preview=%.200s",
-                event_count, role, len(content), content,
-            )
-        elif "contentStart" in evt:
-            cs = evt["contentStart"]
-            log.info(
-                "Drain: event #%d contentStart type=%s role=%s",
-                event_count, cs.get("type"), cs.get("role"),
-            )
-        elif "contentEnd" in evt:
-            ce = evt["contentEnd"]
-            log.info(
-                "Drain: event #%d contentEnd stopReason=%s",
-                event_count, ce.get("stopReason"),
-            )
-        elif "completionEnd" in evt:
-            log.info("Drain: event #%d completionEnd", event_count)
-        elif "audioOutput" in evt:
-            if event_count <= 3 or event_count % 50 == 0:
-                log.info("Drain: event #%d audioOutput (ignoring)", event_count)
-        else:
-            log.info("Drain: event #%d keys=%s", event_count, event_keys)
-
-        if "completionEnd" in evt:
-            completion_seen = True
-            log.info("Drain: completionEnd seen, draining tail events…")
-            tail_deadline = time.monotonic() + 12.0
-            while time.monotonic() < tail_deadline:
-                try:
-                    output = await asyncio.wait_for(
-                        stream.await_output(), timeout=3.0
-                    )
-                    result = await output[1].receive()
-                except (asyncio.TimeoutError, StopAsyncIteration, Exception):
-                    log.info("Drain: tail drain ended")
-                    break
-                if result is None or not (result.value and result.value.bytes_):
+    async def _recv():
+        async for event in stream.output_stream:
+            if not isinstance(event, TranscriptEvent):
+                continue
+            for result in event.transcript.results:
+                if result.is_partial:
                     continue
-                try:
-                    d = json.loads(result.value.bytes_.decode())
-                except json.JSONDecodeError:
-                    continue
-                evt = d.get("event", {})
-                if "textOutput" in evt:
-                    to = evt["textOutput"]
-                    role = (to.get("role") or "").strip().upper()
-                    content = to.get("content") or ""
-                    all_text_parts.append(content)
-                    if role == "ASSISTANT":
-                        assistant_parts.append(content)
-                    log.info("Drain: tail textOutput role=%s len=%d", role, len(content))
-            break
+                for alt in result.alternatives:
+                    if alt.transcript:
+                        transcript_parts.append(alt.transcript)
+                    for item in (alt.items or []):
+                        if getattr(item, "item_type", None) == "pronunciation":
+                            words.append(
+                                {
+                                    "word": item.content,
+                                    "confidence": round(
+                                        getattr(item, "confidence", 1.0), 3
+                                    ),
+                                }
+                            )
+
+    await asyncio.gather(_send(), _recv())
+
+    if words:
+        avg = sum(w["confidence"] for w in words) / len(words)
+        score = round(avg * 100)
+    else:
+        score = 50
+
+    low = sorted(
+        [w for w in words if w["confidence"] < 0.85],
+        key=lambda w: w["confidence"],
+    )
 
     log.info(
-        "Drain: finished — events=%d, assistant_parts=%d (%d chars), all_parts=%d (%d chars)",
-        event_count,
-        len(assistant_parts), sum(len(p) for p in assistant_parts),
-        len(all_text_parts), sum(len(p) for p in all_text_parts),
+        "Transcribe done: %d words, score=%d, low_confidence=%d, transcript=%.200s",
+        len(words), score, len(low), " ".join(transcript_parts),
     )
-    merged = "".join(assistant_parts).strip()
-    if merged:
-        return merged
-    return "".join(all_text_parts).strip()
-
-
-def _sonic_analysis_system_text(
-    ai_transcripts: list[dict], language_level: str
-) -> str:
-    ai_lines = "\n".join(
-        f"{t.get('role', '')}: {t.get('text', '')}" for t in ai_transcripts
-    )
-    level = (
-        f"\n\nLearner self-reported level: {language_level}. "
-        f"Use for scoring context; evidence from audio takes priority.\n"
-        if language_level.strip()
-        else ""
-    )
-    return (
-        "You are an expert English assessor. The learner's practice session "
-        "audio will arrive next as USER audio (16 kHz speech).\n\n"
-        "### ASSISTANT SIDE OF THE CONVERSATION (text, for context only)\n"
-        f"{ai_lines or '(none)'}\n"
-        f"{level}\n"
-        "### TASK\n"
-        "Listen to the learner's audio. Assess their spoken English: "
-        "grammar, fluency, pronunciation (from sound), vocabulary, coherence. "
-        "Do not evaluate the assistant.\n\n"
-        "You MUST respond with a single JSON object only in your ASSISTANT "
-        "text output — no markdown fences, no preamble, no spoken "
-        "conversational filler before or after the JSON. Ignore any separate "
-        "speech synthesis; the app reads only your text channel.\n\n"
-        "### OUTPUT (STRICT JSON ONLY)\n"
-        "{"
-        '"scores":{"grammar":0,"fluency":0,"pronunciation":0,"vocabulary":0,'
-        '"coherence":0,"overall":0},'
-        '"cefr_level":"B1","strengths":[],"weaknesses":[],'
-        '"common_mistakes":[],"corrected_examples":[],"suggestions":[]'
-        "}"
-    )
+    return {
+        "pronunciation_score": score,
+        "word_count": len(words),
+        "low_confidence_words": low[:20],
+        "transcript": " ".join(transcript_parts),
+    }
 
 
 # ── aiohttp handler ──────────────────────────────────────────────
