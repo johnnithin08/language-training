@@ -129,8 +129,16 @@ def verify_cognito_token(token: str) -> dict:
 
 # ── KVS ICE ──────────────────────────────────────────────────────
 
-_kvs = boto3.client("kinesisvideo", region_name=KVS_REGION)
+_kvs_state: dict = {"client": None, "created": 0.0}
 _ice_cache: dict = {"servers": None, "expires": 0}
+
+
+def _get_kvs_client():
+    now = time.time()
+    if _kvs_state["client"] is None or now - _kvs_state["created"] > 600:
+        _kvs_state["client"] = boto3.client("kinesisvideo", region_name=KVS_REGION)
+        _kvs_state["created"] = now
+    return _kvs_state["client"]
 
 
 async def get_ice_servers() -> list:
@@ -141,7 +149,7 @@ async def get_ice_servers() -> list:
 
     ep = await loop.run_in_executor(
         None,
-        lambda: _kvs.get_signaling_channel_endpoint(
+        lambda: _get_kvs_client().get_signaling_channel_endpoint(
             ChannelARN=KVS_CHANNEL_ARN,
             SingleMasterChannelEndpointConfiguration={
                 "Protocols": ["HTTPS"],
@@ -342,11 +350,17 @@ class VoiceSession:
             task.cancel()
         if self._stream:
             try:
-                await self._stream.input_stream.close()
+                await asyncio.wait_for(
+                    self._stream.input_stream.close(), timeout=5.0
+                )
             except Exception:
                 pass
+            self._stream = None
         if self.pc:
-            await self.pc.close()
+            try:
+                await asyncio.wait_for(self.pc.close(), timeout=5.0)
+            except Exception:
+                pass
             self.pc = None
 
     # ── helpers ───────────────────────────────────────────────────
@@ -691,22 +705,20 @@ class VoiceSession:
         self._tasks.clear()
 
         if self._stream:
+            teardown_events = [
+                {"event": {"contentEnd": {"promptName": self._prompt, "contentName": self._audio_cn}}},
+                {"event": {"promptEnd": {"promptName": self._prompt}}},
+                {"event": {"sessionEnd": {}}},
+            ]
+            for evt in teardown_events:
+                try:
+                    await asyncio.wait_for(self._ns_send(evt), timeout=3.0)
+                except Exception:
+                    break
             try:
-                await self._ns_send(
-                    {
-                        "event": {
-                            "contentEnd": {
-                                "promptName": self._prompt,
-                                "contentName": self._audio_cn,
-                            }
-                        }
-                    }
+                await asyncio.wait_for(
+                    self._stream.input_stream.close(), timeout=5.0
                 )
-                await self._ns_send(
-                    {"event": {"promptEnd": {"promptName": self._prompt}}}
-                )
-                await self._ns_send({"event": {"sessionEnd": {}}})
-                await self._stream.input_stream.close()
             except Exception:
                 pass
             self._stream = None
@@ -835,7 +847,7 @@ class VoiceSession:
                         "promptName": pn,
                         "contentName": acn,
                         "type": "AUDIO",
-                        "interactive": True,
+                        "interactive": False,
                         "role": "USER",
                         "audioInputConfiguration": {
                             "mediaType": "audio/lpcm",
@@ -878,10 +890,18 @@ class VoiceSession:
             {"event": {"contentEnd": {"promptName": pn, "contentName": acn}}}
         )
         await send({"event": {"promptEnd": {"promptName": pn}}})
-        await send({"event": {"sessionEnd": {}}})
-        await stream.input_stream.close()
 
         full_text = await _drain_sonic_analysis_text(stream)
+
+        try:
+            await send({"event": {"sessionEnd": {}}})
+        except Exception:
+            pass
+        try:
+            await stream.input_stream.close()
+        except Exception:
+            pass
+
         log.info("Sonic analysis assembled text: %s", full_text[:800])
         return _parse_analysis_json(full_text)
 
@@ -1049,7 +1069,7 @@ async def _handler(request: web.Request):
 
     user_sub = claims.get("sub", "")
 
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
     log.info("Client connected (sub=%s)", user_sub)
 
