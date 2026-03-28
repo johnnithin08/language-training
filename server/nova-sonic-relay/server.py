@@ -79,7 +79,7 @@ BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 BEDROCK_TEXT_REGION = os.environ.get("BEDROCK_TEXT_REGION", "eu-west-2")
 KVS_REGION = os.environ.get("KVS_REGION", "eu-west-2")
 MODEL_ID = os.environ.get("MODEL_ID", "amazon.nova-sonic-v1:0")
-TEXT_MODEL_ID = os.environ.get("TEXT_MODEL_ID", "amazon.nova-pro-v1:0")
+TEXT_MODEL_ID = os.environ.get("TEXT_MODEL_ID", "eu.amazon.nova-pro-v1:0")
 PORT = int(os.environ.get("PORT", "8080"))
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID")
@@ -843,7 +843,7 @@ class VoiceSession:
             len(self._ai_transcripts), TEXT_MODEL_ID,
         )
 
-        bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+        bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_TEXT_REGION)
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
