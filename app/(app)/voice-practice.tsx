@@ -1,46 +1,19 @@
 import { app, colors, white } from "@/constants/colors";
 import { getCategoryDisplayLabel } from "@/constants/conversationCategoryConfig";
 import { useAuth } from "@/contexts/auth";
-import {
-	useVoiceSession,
-	type VoiceSessionAnalysis,
-} from "@/hooks/useVoiceSession";
-import { saveSession, type SessionAnalysis } from "@/services/session";
+import { useVoiceSession } from "@/hooks/useVoiceSession";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
 	ActivityIndicator,
-	Alert,
 	Pressable,
 	StyleSheet,
 	Text,
 	View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-function toSessionAnalysis(va: VoiceSessionAnalysis): SessionAnalysis {
-	return {
-		scores: {
-			grammar: va.scores.grammar ?? 0,
-			fluency: va.scores.fluency ?? 0,
-			pronunciation: va.scores.pronunciation ?? 0,
-			vocabulary: va.scores.vocabulary ?? 0,
-			coherence: va.scores.coherence ?? 0,
-			overall: va.scores.overall ?? 0,
-		},
-		cefr_level: va.cefr_level ?? "",
-		strengths: va.strengths ?? [],
-		weaknesses: va.weaknesses ?? [],
-		common_mistakes: va.common_mistakes ?? [],
-		corrected_examples: (va.corrected_examples ?? []).map((e) => ({
-			original: String(e.original ?? ""),
-			corrected: String(e.corrected ?? ""),
-		})),
-		suggestions: va.suggestions ?? [],
-	};
-}
 
 export default function VoicePracticeScreen() {
 	const router = useRouter();
@@ -51,10 +24,10 @@ export default function VoicePracticeScreen() {
 	const { userData } = useAuth();
 	const insets = useSafeAreaInsets();
 
-	const { step, transcripts, error, analysis, connect, disconnect } =
+	const { step, transcripts, error, sessionId, connect, disconnect } =
 		useVoiceSession();
 	const started = useRef(false);
-	const savedRef = useRef(false);
+	const navigatedRef = useRef(false);
 
 	useEffect(() => {
 		if (started.current) return;
@@ -68,8 +41,14 @@ export default function VoicePracticeScreen() {
 			`Topic: ${category}. ` +
 			`Keep replies concise and natural for spoken conversation. ` +
 			`Gently correct mistakes. Start by greeting the learner and introducing the topic.`;
-		void connect({ voiceId: voiceId ?? "tiffany", systemPrompt });
-	}, [connect, categoryId, voiceId, userData?.currentLevel]);
+		void connect({
+			voiceId: voiceId ?? "tiffany",
+			systemPrompt,
+			categoryId: category,
+			targetLanguage: userData?.targetLanguage ?? "English",
+			languageLevel: level,
+		});
+	}, [connect, categoryId, voiceId, userData?.currentLevel, userData?.targetLanguage]);
 
 	useEffect(() => {
 		return () => {
@@ -78,31 +57,13 @@ export default function VoicePracticeScreen() {
 	}, [disconnect]);
 
 	useEffect(() => {
-		if (!analysis || savedRef.current) return;
-		savedRef.current = true;
-
-		const persist = async () => {
-			try {
-				const sessionId = await saveSession({
-					categoryId: categoryId ?? "free-talk",
-					targetLanguage: userData?.targetLanguage ?? "English",
-					analysis: toSessionAnalysis(analysis),
-				});
-				router.replace({
-					pathname: "/(app)/session-analysis",
-					params: { sessionId },
-				});
-			} catch (e) {
-				const msg =
-					e instanceof Error
-						? e.message
-						: "Could not save this session.";
-				Alert.alert("Session", msg);
-				router.replace("/(app)");
-			}
-		};
-		persist();
-	}, [analysis, categoryId, userData?.targetLanguage, router]);
+		if (!sessionId || navigatedRef.current) return;
+		navigatedRef.current = true;
+		router.replace({
+			pathname: "/(app)/session-analysis",
+			params: { sessionId },
+		});
+	}, [sessionId, router]);
 
 	const statusTitle = useMemo(() => {
 		if (step === "analyzing") return "Analyzing...";
