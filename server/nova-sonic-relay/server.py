@@ -856,7 +856,7 @@ class VoiceSession:
                         "promptName": pn,
                         "contentName": acn,
                         "type": "AUDIO",
-                        "interactive": False,
+                        "interactive": True,
                         "role": "USER",
                         "audioInputConfiguration": {
                             "mediaType": "audio/lpcm",
@@ -874,6 +874,31 @@ class VoiceSession:
         log.info(
             "Analysis: sending %d recorded audio chunks…", len(self._recorded)
         )
+
+        async def _drain_during_send(s):
+            """Consume output events in the background while audio is being sent,
+            so Nova Sonic's output buffer doesn't back-pressure our sends."""
+            while True:
+                try:
+                    output = await asyncio.wait_for(s.await_output(), timeout=0.5)
+                    result = await output[1].receive()
+                    if result.value and result.value.bytes_:
+                        d = json.loads(result.value.bytes_.decode())
+                        evt = d.get("event", {})
+                        if "textOutput" in evt:
+                            to = evt["textOutput"]
+                            role = (to.get("role") or "").strip().upper()
+                            log.info(
+                                "Analysis bg-drain: textOutput role=%s len=%d",
+                                role, len(to.get("content", "")),
+                            )
+                except asyncio.TimeoutError:
+                    continue
+                except Exception:
+                    break
+
+        bg_drain = asyncio.create_task(_drain_during_send(stream))
+
         for i, chunk in enumerate(self._recorded):
             try:
                 await send(
@@ -890,18 +915,72 @@ class VoiceSession:
             except Exception as e:
                 log.error("Analysis audio send error at chunk %d: %s", i, e)
                 break
-            # ~5x real-time pacing (each chunk ≈ 20ms audio → send every ~4ms)
             if i % 5 == 4:
                 await asyncio.sleep(0.02)
+
+        bg_drain.cancel()
+        try:
+            await bg_drain
+        except asyncio.CancelledError:
+            pass
 
         log.info("Analysis: audio sent, sending contentEnd…")
         try:
             await send(
                 {"event": {"contentEnd": {"promptName": pn, "contentName": acn}}}
             )
-            log.info("Analysis: contentEnd sent, sending promptEnd…")
+            log.info("Analysis: audio contentEnd sent")
         except Exception as e:
-            log.error("Analysis: contentEnd send failed: %s", e)
+            log.error("Analysis: audio contentEnd send failed: %s", e)
+            raise
+
+        tcn = str(uuid.uuid4())
+        try:
+            await send(
+                {
+                    "event": {
+                        "contentStart": {
+                            "promptName": pn,
+                            "contentName": tcn,
+                            "type": "TEXT",
+                            "interactive": True,
+                            "role": "USER",
+                            "textInputConfiguration": {
+                                "mediaType": "text/plain"
+                            },
+                        }
+                    }
+                }
+            )
+            await send(
+                {
+                    "event": {
+                        "textInput": {
+                            "promptName": pn,
+                            "contentName": tcn,
+                            "content": (
+                                "Based on the learner's audio you just heard, "
+                                "assess their pronunciation, grammar, fluency, "
+                                "vocabulary, and coherence. Respond ONLY with "
+                                "the JSON object from your system instructions."
+                            ),
+                        }
+                    }
+                }
+            )
+            await send(
+                {
+                    "event": {
+                        "contentEnd": {
+                            "promptName": pn,
+                            "contentName": tcn,
+                        }
+                    }
+                }
+            )
+            log.info("Analysis: trigger text sent, sending promptEnd…")
+        except Exception as e:
+            log.error("Analysis: trigger text send failed: %s", e)
             raise
 
         try:
