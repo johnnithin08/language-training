@@ -832,7 +832,7 @@ class VoiceSession:
                         "promptName": pn,
                         "contentName": acn,
                         "type": "AUDIO",
-                        "interactive": False,
+                        "interactive": True,
                         "role": "USER",
                         "audioInputConfiguration": {
                             "mediaType": "audio/lpcm",
@@ -846,6 +846,11 @@ class VoiceSession:
                 }
             }
         )
+
+        # Drain output concurrently — interactive mode means Nova Sonic
+        # may start responding before all audio is sent.
+        drain_task = asyncio.create_task(_drain_sonic_analysis_text(stream))
+
         log.info(
             "Analysis: sending %d recorded audio chunks…", len(self._recorded)
         )
@@ -865,8 +870,9 @@ class VoiceSession:
             except Exception as e:
                 log.error("Analysis audio send error at chunk %d: %s", i, e)
                 break
-            if i % 50 == 49:
-                await asyncio.sleep(0.01)
+            # ~10x real-time pacing (each chunk ≈ 20ms audio → send every ~2ms)
+            if i % 10 == 9:
+                await asyncio.sleep(0.02)
 
         log.info("Analysis: audio sent, closing input…")
         await send(
@@ -877,7 +883,7 @@ class VoiceSession:
         await asyncio.sleep(0.1)
         await stream.input_stream.close()
 
-        full_text = await _drain_sonic_analysis_text(stream)
+        full_text = await drain_task
         log.info("Sonic analysis assembled text: %s", full_text[:800])
         return _parse_analysis_json(full_text)
 
