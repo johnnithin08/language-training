@@ -832,7 +832,7 @@ class VoiceSession:
                         "promptName": pn,
                         "contentName": acn,
                         "type": "AUDIO",
-                        "interactive": True,
+                        "interactive": False,
                         "role": "USER",
                         "audioInputConfiguration": {
                             "mediaType": "audio/lpcm",
@@ -846,24 +846,35 @@ class VoiceSession:
                 }
             }
         )
-        for chunk in self._recorded:
-            await send(
-                {
-                    "event": {
-                        "audioInput": {
-                            "promptName": pn,
-                            "contentName": acn,
-                            "content": base64.b64encode(chunk).decode(),
+        log.info(
+            "Analysis: sending %d recorded audio chunks…", len(self._recorded)
+        )
+        for i, chunk in enumerate(self._recorded):
+            try:
+                await send(
+                    {
+                        "event": {
+                            "audioInput": {
+                                "promptName": pn,
+                                "contentName": acn,
+                                "content": base64.b64encode(chunk).decode(),
+                            }
                         }
                     }
-                }
-            )
+                )
+            except Exception as e:
+                log.error("Analysis audio send error at chunk %d: %s", i, e)
+                break
+            if i % 50 == 49:
+                await asyncio.sleep(0.01)
 
+        log.info("Analysis: audio sent, closing input…")
         await send(
             {"event": {"contentEnd": {"promptName": pn, "contentName": acn}}}
         )
         await send({"event": {"promptEnd": {"promptName": pn}}})
         await send({"event": {"sessionEnd": {}}})
+        await asyncio.sleep(0.1)
         await stream.input_stream.close()
 
         full_text = await _drain_sonic_analysis_text(stream)
