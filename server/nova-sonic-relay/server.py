@@ -814,19 +814,32 @@ class VoiceSession:
             "Analyze ONLY the learner's turns. Use the pronunciation data "
             "to score pronunciation accurately — low-confidence words indicate "
             "the learner's speech was unclear or mispronounced.\n\n"
-            "Assess: grammar, fluency, pronunciation, vocabulary, coherence.\n\n"
-            "Respond with ONLY a valid JSON object — no markdown fences, "
-            "no explanation, no extra text.\n\n"
-            "JSON schema (scores are 0-100):\n"
+            "The learner's lines are transcribed from speech, not typed. "
+            "Do NOT treat missing or incorrect punctuation as errors.\n\n"
+            "### SCORING CRITERIA (0–10)\n"
+            "grammar: Correct use of tense, sentence structure, agreement\n"
+            "fluency: Natural flow and ease of expression\n"
+            "pronunciation: Based on the audio confidence data provided\n"
+            "vocabulary: Range and appropriateness of vocabulary\n"
+            "coherence: Logical connection of ideas and clarity\n"
+            "overall: Balanced average of the above scores\n\n"
+            "### RULES\n"
+            "- Score conservatively (avoid scores above 8 unless clearly advanced)\n"
+            "- Focus on patterns, not one-off mistakes\n"
+            "- Be constructive and encouraging\n"
+            "- Output a single compact JSON object only (no markdown fences, "
+            "no preamble, no closing remarks)\n\n"
+            "### OUTPUT FORMAT (STRICT — return ONLY valid JSON):\n"
             "{\n"
             '  "scores": {"grammar": 0, "fluency": 0, "pronunciation": 0, '
             '"vocabulary": 0, "coherence": 0, "overall": 0},\n'
-            '  "cefr_level": "A1|A2|B1|B2|C1|C2",\n'
-            '  "strengths": ["..."],\n'
-            '  "weaknesses": ["..."],\n'
-            '  "common_mistakes": ["..."],\n'
-            '  "corrected_examples": ["..."],\n'
-            '  "suggestions": ["..."]\n'
+            '  "cefr_level": "B1",\n'
+            '  "strengths": ["short bullet point"],\n'
+            '  "weaknesses": ["short bullet point"],\n'
+            '  "common_mistakes": ["short description"],\n'
+            '  "corrected_examples": [{"original": "learner said this", '
+            '"corrected": "should be this"}],\n'
+            '  "suggestions": ["actionable tip"]\n'
             "}"
         )
 
