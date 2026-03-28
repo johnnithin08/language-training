@@ -874,31 +874,6 @@ class VoiceSession:
         log.info(
             "Analysis: sending %d recorded audio chunks…", len(self._recorded)
         )
-
-        async def _drain_during_send(s):
-            """Consume output events in the background while audio is being sent,
-            so Nova Sonic's output buffer doesn't back-pressure our sends."""
-            while True:
-                try:
-                    output = await asyncio.wait_for(s.await_output(), timeout=0.5)
-                    result = await output[1].receive()
-                    if result.value and result.value.bytes_:
-                        d = json.loads(result.value.bytes_.decode())
-                        evt = d.get("event", {})
-                        if "textOutput" in evt:
-                            to = evt["textOutput"]
-                            role = (to.get("role") or "").strip().upper()
-                            log.info(
-                                "Analysis bg-drain: textOutput role=%s len=%d",
-                                role, len(to.get("content", "")),
-                            )
-                except asyncio.TimeoutError:
-                    continue
-                except Exception:
-                    break
-
-        bg_drain = asyncio.create_task(_drain_during_send(stream))
-
         for i, chunk in enumerate(self._recorded):
             try:
                 await send(
@@ -917,12 +892,6 @@ class VoiceSession:
                 break
             if i % 5 == 4:
                 await asyncio.sleep(0.02)
-
-        bg_drain.cancel()
-        try:
-            await bg_drain
-        except asyncio.CancelledError:
-            pass
 
         log.info("Analysis: audio sent, sending contentEnd…")
         try:
@@ -1079,9 +1048,9 @@ async def _drain_sonic_analysis_text(stream) -> str:
             log.warning("Drain: traceback: %s", traceback.format_exc())
             break
 
-        if not (result.value and result.value.bytes_):
+        if result is None or not (result.value and result.value.bytes_):
             event_count += 1
-            log.debug("Drain: event #%d empty payload, skipping", event_count)
+            log.debug("Drain: event #%d empty/None payload, skipping", event_count)
             continue
 
         raw = result.value.bytes_.decode()
@@ -1139,7 +1108,7 @@ async def _drain_sonic_analysis_text(stream) -> str:
                 except (asyncio.TimeoutError, StopAsyncIteration, Exception):
                     log.info("Drain: tail drain ended")
                     break
-                if not (result.value and result.value.bytes_):
+                if result is None or not (result.value and result.value.bytes_):
                     continue
                 try:
                     d = json.loads(result.value.bytes_.decode())
