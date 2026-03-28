@@ -843,7 +843,7 @@ class VoiceSession:
             len(self._ai_transcripts), TEXT_MODEL_ID,
         )
 
-        bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_TEXT_REGION)
+        bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
