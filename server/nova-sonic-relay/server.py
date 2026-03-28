@@ -755,7 +755,15 @@ class VoiceSession:
         return await self._analyze_nova_sonic()
 
     async def _analyze_nova_sonic(self) -> dict:
-        """Separate bidirectional stream: system text + user audio → text JSON."""
+        """Two-prompt analysis over a single Nova Sonic bidirectional stream.
+
+        Prompt 1  – system context + recorded user audio (interactive).
+                    The model processes pronunciation/fluency/audio features
+                    and emits transcriptions.  We consume them and move on.
+        Prompt 2  – a USER text turn asking the model to produce the JSON
+                    assessment.  The model retains audio context from prompt 1
+                    and generates ASSISTANT text with the analysis.
+        """
         if not self._recorded:
             raise ValueError("No audio recorded for Sonic analysis")
 
@@ -764,13 +772,9 @@ class VoiceSession:
             InvokeModelWithBidirectionalStreamOperationInput(model_id=MODEL_ID)
         )
 
-        pn = str(uuid.uuid4())
-        scn = str(uuid.uuid4())
-        acn = str(uuid.uuid4())
         sys_text = _sonic_analysis_system_text(
             self._ai_transcripts, self.language_level
         )
-
         log.info(
             "Analysis: stream opened, system text length=%d, transcripts=%d",
             len(sys_text), len(self._ai_transcripts),
@@ -785,6 +789,19 @@ class VoiceSession:
                 )
             )
 
+        prompt_output_cfg = {
+            "textOutputConfiguration": {"mediaType": "text/plain"},
+            "audioOutputConfiguration": {
+                "mediaType": "audio/lpcm",
+                "sampleRateHertz": 16000,
+                "sampleSizeBits": 16,
+                "channelCount": 1,
+                "voiceId": self.voice_id,
+                "encoding": "base64",
+                "audioType": "SPEECH",
+            },
+        }
+
         await send(
             {
                 "event": {
@@ -798,33 +815,19 @@ class VoiceSession:
                 }
             }
         )
-        # Text output for JSON; audio output is still declared (Sonic contract)
-        # — we ignore audioOutput events in the drain loop.
-        await send(
-            {
-                "event": {
-                    "promptStart": {
-                        "promptName": pn,
-                        "textOutputConfiguration": {"mediaType": "text/plain"},
-                        "audioOutputConfiguration": {
-                            "mediaType": "audio/lpcm",
-                            "sampleRateHertz": 16000,
-                            "sampleSizeBits": 16,
-                            "channelCount": 1,
-                            "voiceId": self.voice_id,
-                            "encoding": "base64",
-                            "audioType": "SPEECH",
-                        },
-                    }
-                }
-            }
-        )
+
+        # ── Prompt 1: system context + user audio ─────────────────
+        pn1 = str(uuid.uuid4())
+        scn = str(uuid.uuid4())
+        acn = str(uuid.uuid4())
+
+        await send({"event": {"promptStart": {"promptName": pn1, **prompt_output_cfg}}})
 
         await send(
             {
                 "event": {
                     "contentStart": {
-                        "promptName": pn,
+                        "promptName": pn1,
                         "contentName": scn,
                         "type": "TEXT",
                         "interactive": False,
@@ -835,25 +838,15 @@ class VoiceSession:
             }
         )
         await send(
-            {
-                "event": {
-                    "textInput": {
-                        "promptName": pn,
-                        "contentName": scn,
-                        "content": sys_text,
-                    }
-                }
-            }
+            {"event": {"textInput": {"promptName": pn1, "contentName": scn, "content": sys_text}}}
         )
-        await send(
-            {"event": {"contentEnd": {"promptName": pn, "contentName": scn}}}
-        )
+        await send({"event": {"contentEnd": {"promptName": pn1, "contentName": scn}}})
 
         await send(
             {
                 "event": {
                     "contentStart": {
-                        "promptName": pn,
+                        "promptName": pn1,
                         "contentName": acn,
                         "type": "AUDIO",
                         "interactive": True,
@@ -871,16 +864,14 @@ class VoiceSession:
             }
         )
 
-        log.info(
-            "Analysis: sending %d recorded audio chunks…", len(self._recorded)
-        )
+        log.info("Analysis P1: sending %d recorded audio chunks…", len(self._recorded))
         for i, chunk in enumerate(self._recorded):
             try:
                 await send(
                     {
                         "event": {
                             "audioInput": {
-                                "promptName": pn,
+                                "promptName": pn1,
                                 "contentName": acn,
                                 "content": base64.b64encode(chunk).decode(),
                             }
@@ -888,80 +879,97 @@ class VoiceSession:
                     }
                 )
             except Exception as e:
-                log.error("Analysis audio send error at chunk %d: %s", i, e)
+                log.error("Analysis P1: audio send error at chunk %d: %s", i, e)
                 break
             if i % 5 == 4:
                 await asyncio.sleep(0.02)
 
-        log.info("Analysis: audio sent, sending contentEnd…")
-        try:
-            await send(
-                {"event": {"contentEnd": {"promptName": pn, "contentName": acn}}}
-            )
-            log.info("Analysis: audio contentEnd sent")
-        except Exception as e:
-            log.error("Analysis: audio contentEnd send failed: %s", e)
-            raise
+        log.info("Analysis P1: audio sent, closing content + prompt…")
+        await send({"event": {"contentEnd": {"promptName": pn1, "contentName": acn}}})
+        await send({"event": {"promptEnd": {"promptName": pn1}}})
 
+        log.info("Analysis P1: draining transcription events…")
+        await _drain_until_completion(stream)
+        log.info("Analysis P1: transcription complete")
+
+        # ── Prompt 2: request the JSON analysis ───────────────────
+        pn2 = str(uuid.uuid4())
+        scn2 = str(uuid.uuid4())
         tcn = str(uuid.uuid4())
-        try:
-            await send(
-                {
-                    "event": {
-                        "contentStart": {
-                            "promptName": pn,
-                            "contentName": tcn,
-                            "type": "TEXT",
-                            "interactive": True,
-                            "role": "USER",
-                            "textInputConfiguration": {
-                                "mediaType": "text/plain"
-                            },
-                        }
-                    }
-                }
-            )
-            await send(
-                {
-                    "event": {
-                        "textInput": {
-                            "promptName": pn,
-                            "contentName": tcn,
-                            "content": (
-                                "Based on the learner's audio you just heard, "
-                                "assess their pronunciation, grammar, fluency, "
-                                "vocabulary, and coherence. Respond ONLY with "
-                                "the JSON object from your system instructions."
-                            ),
-                        }
-                    }
-                }
-            )
-            await send(
-                {
-                    "event": {
-                        "contentEnd": {
-                            "promptName": pn,
-                            "contentName": tcn,
-                        }
-                    }
-                }
-            )
-            log.info("Analysis: trigger text sent, sending promptEnd…")
-        except Exception as e:
-            log.error("Analysis: trigger text send failed: %s", e)
-            raise
 
-        try:
-            await send({"event": {"promptEnd": {"promptName": pn}}})
-            log.info("Analysis: promptEnd sent, starting drain…")
-        except Exception as e:
-            log.error("Analysis: promptEnd send failed: %s", e)
-            raise
+        await send({"event": {"promptStart": {"promptName": pn2, **prompt_output_cfg}}})
+
+        await send(
+            {
+                "event": {
+                    "contentStart": {
+                        "promptName": pn2,
+                        "contentName": scn2,
+                        "type": "TEXT",
+                        "interactive": False,
+                        "role": "SYSTEM",
+                        "textInputConfiguration": {"mediaType": "text/plain"},
+                    }
+                }
+            }
+        )
+        await send(
+            {
+                "event": {
+                    "textInput": {
+                        "promptName": pn2,
+                        "contentName": scn2,
+                        "content": (
+                            "You just listened to a language learner's spoken audio. "
+                            "Assess their pronunciation quality (based on the sound "
+                            "you heard), grammar, fluency, vocabulary, and coherence. "
+                            "You MUST respond with ONLY a single JSON object in your "
+                            "ASSISTANT text output — no markdown fences, no preamble, "
+                            "no conversational filler, no spoken audio response.\n\n"
+                            "JSON schema:\n"
+                            '{"scores":{"grammar":0,"fluency":0,"pronunciation":0,'
+                            '"vocabulary":0,"coherence":0,"overall":0},'
+                            '"cefr_level":"B1","strengths":[],"weaknesses":[],'
+                            '"common_mistakes":[],"corrected_examples":[],"suggestions":[]}'
+                        ),
+                    }
+                }
+            }
+        )
+        await send({"event": {"contentEnd": {"promptName": pn2, "contentName": scn2}}})
+
+        await send(
+            {
+                "event": {
+                    "contentStart": {
+                        "promptName": pn2,
+                        "contentName": tcn,
+                        "type": "TEXT",
+                        "interactive": True,
+                        "role": "USER",
+                        "textInputConfiguration": {"mediaType": "text/plain"},
+                    }
+                }
+            }
+        )
+        await send(
+            {
+                "event": {
+                    "textInput": {
+                        "promptName": pn2,
+                        "contentName": tcn,
+                        "content": "Provide the JSON assessment now.",
+                    }
+                }
+            }
+        )
+        await send({"event": {"contentEnd": {"promptName": pn2, "contentName": tcn}}})
+        await send({"event": {"promptEnd": {"promptName": pn2}}})
+        log.info("Analysis P2: prompt sent, draining analysis…")
 
         full_text = await _drain_sonic_analysis_text(stream)
         log.info(
-            "Analysis: drain complete, text length=%d, text=%.800s",
+            "Analysis P2: drain complete, text length=%d, text=%.800s",
             len(full_text), full_text,
         )
 
@@ -1003,6 +1011,53 @@ class VoiceSession:
 
 
 # ── Analysis helpers ──────────────────────────────────────────────
+
+
+async def _drain_until_completion(stream):
+    """Consume all output events from a Nova Sonic stream until completionEnd.
+
+    Used after prompt 1 (audio processing) to flush transcription events
+    before starting prompt 2 (analysis request).
+    """
+    event_count = 0
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        try:
+            wait = min(30.0, deadline - time.monotonic())
+            if wait <= 0:
+                break
+            output = await asyncio.wait_for(stream.await_output(), timeout=wait)
+            result = await output[1].receive()
+        except (StopAsyncIteration, asyncio.TimeoutError):
+            log.info("P1 drain: stop/timeout after %d events", event_count)
+            break
+        except Exception as e:
+            log.warning("P1 drain: exception after %d events: %s", event_count, e)
+            break
+
+        event_count += 1
+        if result is None or not (result.value and result.value.bytes_):
+            continue
+
+        try:
+            d = json.loads(result.value.bytes_.decode())
+        except json.JSONDecodeError:
+            continue
+
+        evt = d.get("event", {})
+        if "textOutput" in evt:
+            to = evt["textOutput"]
+            log.info(
+                "P1 drain: event #%d textOutput role=%s preview=%.80s",
+                event_count, to.get("role", ""), to.get("content", ""),
+            )
+        elif "completionEnd" in evt:
+            log.info("P1 drain: completionEnd after %d events", event_count)
+            return
+        elif event_count <= 5:
+            log.info("P1 drain: event #%d keys=%s", event_count, list(evt.keys()))
+
+    log.warning("P1 drain: exited without completionEnd (%d events)", event_count)
 
 
 def _parse_analysis_json(text: str) -> dict:
