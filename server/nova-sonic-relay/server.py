@@ -2,6 +2,9 @@
 
 Replaces the Node.js wrtc-based server with a cleaner audio pipeline:
   aiortc (WebRTC) ↔ resample ↔ Nova Sonic (Bedrock bidirectional stream)
+
+Post-session analysis: a second Nova Sonic stream (recorded user audio +
+system prompt) collects ASSISTANT textOutput as JSON.
 """
 
 import asyncio
@@ -12,6 +15,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 
 import aiohttp
 import boto3
@@ -72,17 +76,21 @@ _load_env("/app/relay.env")
 # ── Config ────────────────────────────────────────────────────────
 
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
+BEDROCK_TEXT_REGION = os.environ.get("BEDROCK_TEXT_REGION", "eu-west-2")
 KVS_REGION = os.environ.get("KVS_REGION", "eu-west-2")
 MODEL_ID = os.environ.get("MODEL_ID", "amazon.nova-sonic-v1:0")
 PORT = int(os.environ.get("PORT", "8080"))
 USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 APP_CLIENT_ID = os.environ.get("COGNITO_APP_CLIENT_ID")
 KVS_CHANNEL_ARN = os.environ.get("KVS_CHANNEL_ARN", "")
+SESSION_TABLE_NAME = os.environ.get("SESSION_TABLE_NAME", "")
 
 if not USER_POOL_ID:
     raise SystemExit("COGNITO_USER_POOL_ID is required")
 if not KVS_CHANNEL_ARN:
     raise SystemExit("KVS_CHANNEL_ARN is required")
+if not SESSION_TABLE_NAME:
+    raise SystemExit("SESSION_TABLE_NAME is required")
 
 SILENCE_B64 = base64.b64encode(b"\x00" * 1600).decode()
 FRAME_SAMPLES = 960  # 20 ms at 48 kHz
@@ -273,11 +281,16 @@ class AIOutputTrack(MediaStreamTrack):
 
 
 class VoiceSession:
-    def __init__(self, ws: web.WebSocketResponse):
+    def __init__(self, ws: web.WebSocketResponse, *, user_sub: str = ""):
         self.ws = ws
         self.pc: RTCPeerConnection | None = None
         self.ai_track = AIOutputTrack()
         self.active = False
+
+        self.user_sub = user_sub
+        self.category_id = "free-talk"
+        self.target_language = "English"
+        self.language_level = ""
 
         self.system_prompt = (
             "You are a friendly language practice partner. "
@@ -304,6 +317,9 @@ class VoiceSession:
         if t == "session_start":
             self.system_prompt = msg.get("systemPrompt") or self.system_prompt
             self.voice_id = msg.get("voiceId") or self.voice_id
+            self.category_id = msg.get("categoryId") or self.category_id
+            self.target_language = msg.get("targetLanguage") or self.target_language
+            self.language_level = msg.get("languageLevel") or self.language_level
             try:
                 servers = await get_ice_servers()
                 await self._ws_send({"type": "ice_servers", "iceServers": servers})
@@ -702,10 +718,13 @@ class VoiceSession:
         await self._ws_send({"type": "analyzing"})
 
         try:
-            result = await self._analyze()
-            await self._ws_send({"type": "analysis", "data": result})
+            analysis = await self._analyze()
+            session_id = await self._save_session(analysis)
+            await self._ws_send(
+                {"type": "session_complete", "sessionId": session_id}
+            )
         except Exception as e:
-            log.error("Analysis: %s", e)
+            log.error("Analysis/save: %s", e)
             await self._ws_send(
                 {"type": "error", "message": f"Analysis failed: {e}"}
             )
@@ -714,8 +733,12 @@ class VoiceSession:
         self._ai_transcripts.clear()
 
     async def _analyze(self) -> dict:
+        return await self._analyze_nova_sonic()
+
+    async def _analyze_nova_sonic(self) -> dict:
+        """Separate bidirectional stream: system text + user audio → text JSON."""
         if not self._recorded:
-            raise ValueError("No audio recorded for analysis")
+            raise ValueError("No audio recorded for Sonic analysis")
 
         client = create_bedrock_client()
         stream = await client.invoke_model_with_bidirectional_stream(
@@ -725,11 +748,11 @@ class VoiceSession:
         pn = str(uuid.uuid4())
         scn = str(uuid.uuid4())
         acn = str(uuid.uuid4())
-        ai_text = "\n".join(
-            f"{t['role']}: {t['text']}" for t in self._ai_transcripts
+        sys_text = _sonic_analysis_system_text(
+            self._ai_transcripts, self.language_level
         )
 
-        async def send(obj):
+        async def send(obj: dict):
             await stream.input_stream.send(
                 InvokeModelWithBidirectionalStreamInputChunk(
                     value=BidirectionalInputPayloadPart(
@@ -745,12 +768,14 @@ class VoiceSession:
                         "inferenceConfiguration": {
                             "maxTokens": 4096,
                             "topP": 0.9,
-                            "temperature": 0.3,
+                            "temperature": 0.2,
                         }
                     }
                 }
             }
         )
+        # Text output for JSON; audio output is still declared (Sonic contract)
+        # — we ignore audioOutput events in the drain loop.
         await send(
             {
                 "event": {
@@ -791,7 +816,7 @@ class VoiceSession:
                     "textInput": {
                         "promptName": pn,
                         "contentName": scn,
-                        "content": _analysis_prompt(ai_text),
+                        "content": sys_text,
                     }
                 }
             }
@@ -841,72 +866,146 @@ class VoiceSession:
         await send({"event": {"sessionEnd": {}}})
         await stream.input_stream.close()
 
-        parts: list[str] = []
-        while True:
-            try:
-                output = await asyncio.wait_for(
-                    stream.await_output(), timeout=60
-                )
-                result = await output[1].receive()
-                if result.value and result.value.bytes_:
-                    d = json.loads(result.value.bytes_.decode())
-                    if "textOutput" in d.get("event", {}):
-                        parts.append(d["event"]["textOutput"]["content"])
-            except Exception:
+        full_text = await _drain_sonic_analysis_text(stream)
+        log.info("Sonic analysis assembled text: %s", full_text[:800])
+        return _parse_analysis_json(full_text)
+
+    async def _save_session(self, analysis: dict) -> str:
+        """Write session + analysis to DynamoDB and return the session id."""
+        session_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        table = boto3.resource(
+            "dynamodb", region_name=BEDROCK_TEXT_REGION
+        ).Table(SESSION_TABLE_NAME)
+
+        item = {
+            "id": session_id,
+            "__typename": "Session",
+            "categoryId": self.category_id,
+            "targetLanguage": self.target_language,
+            "analysisJson": json.dumps(analysis),
+            "owner": self.user_sub,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, lambda: table.put_item(Item=item))
+        log.info("Saved session %s for owner %s", session_id, self.user_sub)
+        return session_id
+
+
+# ── Analysis helpers ──────────────────────────────────────────────
+
+
+def _parse_analysis_json(text: str) -> dict:
+    i, j = text.find("{"), text.rfind("}")
+    if i == -1 or j == -1 or j <= i:
+        raise ValueError("No JSON in analysis output")
+    return json.loads(text[i : j + 1])
+
+
+async def _drain_sonic_analysis_text(stream) -> str:
+    """Collect ASSISTANT textOutput from a Nova Sonic stream until completionEnd."""
+    assistant_parts: list[str] = []
+    all_text_parts: list[str] = []
+    deadline = time.monotonic() + 180.0
+    completion_seen = False
+
+    while time.monotonic() < deadline:
+        try:
+            wait = min(45.0, deadline - time.monotonic())
+            if wait <= 0:
                 break
+            output = await asyncio.wait_for(stream.await_output(), timeout=wait)
+            result = await output[1].receive()
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            if completion_seen:
+                break
+            continue
+        except Exception as e:
+            log.warning("Sonic analysis drain: %s", e)
+            break
 
-        full = "".join(parts)
-        log.info("Analysis text: %s", full[:500])
+        if not (result.value and result.value.bytes_):
+            continue
+        try:
+            d = json.loads(result.value.bytes_.decode())
+        except json.JSONDecodeError:
+            continue
 
-        i, j = full.find("{"), full.rfind("}")
-        if i == -1 or j == -1:
-            raise ValueError("No JSON in analysis output")
-        return json.loads(full[i : j + 1])
+        evt = d.get("event", {})
+        if "textOutput" in evt:
+            to = evt["textOutput"]
+            role = (to.get("role") or "").strip().upper()
+            content = to.get("content") or ""
+            all_text_parts.append(content)
+            if role == "ASSISTANT":
+                assistant_parts.append(content)
+        if "completionEnd" in evt:
+            completion_seen = True
+            tail_deadline = time.monotonic() + 12.0
+            while time.monotonic() < tail_deadline:
+                try:
+                    output = await asyncio.wait_for(
+                        stream.await_output(), timeout=3.0
+                    )
+                    result = await output[1].receive()
+                except (asyncio.TimeoutError, StopAsyncIteration, Exception):
+                    break
+                if not (result.value and result.value.bytes_):
+                    continue
+                try:
+                    d = json.loads(result.value.bytes_.decode())
+                except json.JSONDecodeError:
+                    continue
+                evt = d.get("event", {})
+                if "textOutput" in evt:
+                    to = evt["textOutput"]
+                    role = (to.get("role") or "").strip().upper()
+                    content = to.get("content") or ""
+                    all_text_parts.append(content)
+                    if role == "ASSISTANT":
+                        assistant_parts.append(content)
+            break
+
+    merged = "".join(assistant_parts).strip()
+    if merged:
+        return merged
+    # Rare: model put JSON in a non-ASSISTANT textOutput
+    return "".join(all_text_parts).strip()
 
 
-# ── Analysis prompt ───────────────────────────────────────────────
-
-
-def _analysis_prompt(ai_text: str) -> str:
+def _sonic_analysis_system_text(
+    ai_transcripts: list[dict], language_level: str
+) -> str:
+    ai_lines = "\n".join(
+        f"{t.get('role', '')}: {t.get('text', '')}" for t in ai_transcripts
+    )
+    level = (
+        f"\n\nLearner self-reported level: {language_level}. "
+        f"Use for scoring context; evidence from audio takes priority.\n"
+        if language_level.strip()
+        else ""
+    )
     return (
-        "You are an expert English language assessor. You are about to hear "
-        "a recording of a language learner practicing spoken English.\n\n"
-        "The AI assistant's side of the conversation is provided below as text "
-        "for context. Analyze ONLY the learner's speech — do not evaluate the "
-        "assistant.\n\n"
-        "### CONVERSATION CONTEXT (AI assistant responses):\n"
-        f"{ai_text}\n\n"
-        "### YOUR TASK:\n"
-        "Listen carefully to the learner's audio and provide a structured "
-        "assessment.\n\n"
-        "### SCORING CRITERIA (0-10):\n"
-        "grammar – Correct use of tense, sentence structure, and agreement\n"
-        "fluency – Natural flow, speaking pace, hesitations, filler words, "
-        "and ease of expression\n"
-        "pronunciation – Accent clarity, word-level pronunciation accuracy, "
-        "intonation patterns, and stress placement\n"
-        "vocabulary – Range and appropriateness of vocabulary\n"
-        "coherence – Logical connection of ideas and clarity across sentences\n"
-        "overall – Balanced average of the above scores\n\n"
-        "### ALSO PROVIDE:\n"
-        "- cefr_level (A1, A2, B1, B2, C1, or C2)\n"
-        "- strengths (3-5 short bullet points)\n"
-        "- weaknesses (3-5 short bullet points)\n"
-        "- common_mistakes (list repeated or important mistakes)\n"
-        '- corrected_examples (up to 5): Each item: { "original": "...", '
-        '"corrected": "..." }\n'
-        "- suggestions (3-5 actionable tips)\n\n"
-        "### RULES:\n"
-        "- Be consistent and objective\n"
-        "- Score conservatively (avoid scores above 8 unless clearly advanced)\n"
-        "- Focus on patterns, not one-off mistakes\n"
-        "- Be constructive and encouraging\n"
-        "- For pronunciation: comment on specific sounds, stress patterns, or "
-        "intonation issues\n"
-        "- Output a single compact JSON object only (no markdown fences, no "
-        "preamble, no closing remarks)\n\n"
-        "### OUTPUT FORMAT (STRICT):\n"
-        "Return ONLY valid JSON:\n"
+        "You are an expert English assessor. The learner's practice session "
+        "audio will arrive next as USER audio (16 kHz speech).\n\n"
+        "### ASSISTANT SIDE OF THE CONVERSATION (text, for context only)\n"
+        f"{ai_lines or '(none)'}\n"
+        f"{level}\n"
+        "### TASK\n"
+        "Listen to the learner's audio. Assess their spoken English: "
+        "grammar, fluency, pronunciation (from sound), vocabulary, coherence. "
+        "Do not evaluate the assistant.\n\n"
+        "You MUST respond with a single JSON object only in your ASSISTANT "
+        "text output — no markdown fences, no preamble, no spoken "
+        "conversational filler before or after the JSON. Ignore any separate "
+        "speech synthesis; the app reads only your text channel.\n\n"
+        "### OUTPUT (STRICT JSON ONLY)\n"
         "{"
         '"scores":{"grammar":0,"fluency":0,"pronunciation":0,"vocabulary":0,'
         '"coherence":0,"overall":0},'
@@ -928,16 +1027,18 @@ async def _handler(request: web.Request):
         return web.Response(status=401, text="Missing token")
 
     try:
-        verify_cognito_token(token)
+        claims = verify_cognito_token(token)
     except Exception as e:
         log.warning("Auth: %s", e)
         return web.Response(status=401, text="Unauthorized")
 
+    user_sub = claims.get("sub", "")
+
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-    log.info("Client connected")
+    log.info("Client connected (sub=%s)", user_sub)
 
-    session = VoiceSession(ws)
+    session = VoiceSession(ws, user_sub=user_sub)
     try:
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT:

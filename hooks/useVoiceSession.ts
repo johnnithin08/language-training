@@ -1,5 +1,6 @@
 import { fetchAuthSession } from "aws-amplify/auth";
 import { useCallback, useEffect, useRef, useState } from "react";
+import InCallManager from "react-native-incall-manager";
 import {
 	RTCIceCandidate,
 	RTCPeerConnection,
@@ -20,22 +21,6 @@ export type VoiceSessionStep =
 	| "analyzing"
 	| "error";
 
-export type VoiceSessionAnalysis = {
-	scores: {
-		grammar: number;
-		fluency: number;
-		pronunciation: number;
-		vocabulary: number;
-		coherence: number;
-		overall: number;
-	};
-	cefr_level: string;
-	strengths: string[];
-	weaknesses: string[];
-	common_mistakes: string[];
-	corrected_examples: { original: string; corrected: string }[];
-	suggestions: string[];
-};
 
 async function getCognitoToken(): Promise<string> {
 	const session = await fetchAuthSession();
@@ -54,14 +39,20 @@ export function useVoiceSession() {
 		[],
 	);
 	const [error, setError] = useState<string | null>(null);
-	const [analysis, setAnalysis] = useState<VoiceSessionAnalysis | null>(null);
+	const [sessionId, setSessionId] = useState<string | null>(null);
 
 	const connect = useCallback(
-		async (options?: { voiceId?: string; systemPrompt?: string }) => {
+		async (options?: {
+			voiceId?: string;
+			systemPrompt?: string;
+			categoryId?: string;
+			targetLanguage?: string;
+			languageLevel?: string;
+		}) => {
 			setStep("connecting");
 			setError(null);
 			setTranscripts([]);
-			setAnalysis(null);
+			setSessionId(null);
 
 			try {
 				const token = await getCognitoToken();
@@ -76,6 +67,9 @@ export function useVoiceSession() {
 							type: "session_start",
 							voiceId: options?.voiceId,
 							systemPrompt: options?.systemPrompt,
+							categoryId: options?.categoryId,
+							targetLanguage: options?.targetLanguage,
+							languageLevel: options?.languageLevel,
 						}),
 					);
 				};
@@ -117,8 +111,8 @@ export function useVoiceSession() {
 						]);
 					} else if (msg.type === "analyzing") {
 						setStep("analyzing");
-					} else if (msg.type === "analysis") {
-						setAnalysis(msg.data);
+					} else if (msg.type === "session_complete") {
+						setSessionId(msg.sessionId);
 						setStep("idle");
 					} else if (msg.type === "error") {
 						setError(msg.message);
@@ -150,11 +144,14 @@ export function useVoiceSession() {
 
 	async function setupWebRTC(socket: WebSocket, iceServers: RTCIceServer[]) {
 		try {
-			const stream = (await mediaDevices.getUserMedia({
-				audio: true,
-				video: false,
-			})) as RNMediaStream;
-			localStream.current = stream;
+		InCallManager.start({ media: "video" });
+		InCallManager.setForceSpeakerphoneOn(true);
+
+		const stream = (await mediaDevices.getUserMedia({
+			audio: true,
+			video: false,
+		})) as RNMediaStream;
+		localStream.current = stream;
 
 			const peerConnection = new RTCPeerConnection({
 				iceServers,
@@ -228,6 +225,9 @@ export function useVoiceSession() {
 			pc.current.close();
 			pc.current = null;
 		}
+
+		InCallManager.setForceSpeakerphoneOn(false);
+		InCallManager.stop();
 	}, []);
 
 	useEffect(() => {
@@ -235,6 +235,8 @@ export function useVoiceSession() {
 			localStream.current?.getTracks().forEach((t) => t.stop());
 			pc.current?.close();
 			ws.current?.close();
+			InCallManager.setForceSpeakerphoneOn(false);
+			InCallManager.stop();
 		};
 	}, []);
 
@@ -242,7 +244,7 @@ export function useVoiceSession() {
 		step,
 		transcripts,
 		error,
-		analysis,
+		sessionId,
 		connect,
 		disconnect,
 	};
