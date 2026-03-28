@@ -717,6 +717,9 @@ class VoiceSession:
 
         await self._ws_send({"type": "analyzing"})
 
+        # Let the CRT fully tear down the live stream before opening a new one
+        await asyncio.sleep(2)
+
         try:
             analysis = await self._analyze()
             session_id = await self._save_session(analysis)
@@ -847,10 +850,6 @@ class VoiceSession:
             }
         )
 
-        # Drain output concurrently — interactive mode means Nova Sonic
-        # may start responding before all audio is sent.
-        drain_task = asyncio.create_task(_drain_sonic_analysis_text(stream))
-
         log.info(
             "Analysis: sending %d recorded audio chunks…", len(self._recorded)
         )
@@ -870,8 +869,8 @@ class VoiceSession:
             except Exception as e:
                 log.error("Analysis audio send error at chunk %d: %s", i, e)
                 break
-            # ~10x real-time pacing (each chunk ≈ 20ms audio → send every ~2ms)
-            if i % 10 == 9:
+            # ~5x real-time pacing (each chunk ≈ 20ms audio → send every ~4ms)
+            if i % 5 == 4:
                 await asyncio.sleep(0.02)
 
         log.info("Analysis: audio sent, closing input…")
@@ -880,10 +879,9 @@ class VoiceSession:
         )
         await send({"event": {"promptEnd": {"promptName": pn}}})
         await send({"event": {"sessionEnd": {}}})
-        await asyncio.sleep(0.1)
         await stream.input_stream.close()
 
-        full_text = await drain_task
+        full_text = await _drain_sonic_analysis_text(stream)
         log.info("Sonic analysis assembled text: %s", full_text[:800])
         return _parse_analysis_json(full_text)
 
