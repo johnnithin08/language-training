@@ -367,19 +367,19 @@ export type ScoreBand = {
 export const SCORE_BANDS: readonly ScoreBand[] = [
   {
     min: 0,
-    max: 6,
+    max: 5,
     key: 'developing',
     label: 'Developing',
-    rangeLabel: '0 – 5.9',
+    rangeLabel: '0 – 4.9',
     solid: '#f97316',
     gradient: ['#9a3412', '#fdba74'],
   },
   {
-    min: 6,
+    min: 5,
     max: 7.5,
     key: 'proficient',
     label: 'Proficient',
-    rangeLabel: '6 – 7.4',
+    rangeLabel: '5 – 7.4',
     solid: '#38bdf8',
     gradient: ['#1e40af', '#7dd3fc'],
   },
@@ -402,7 +402,7 @@ function clampScore10(score: number): number {
 export function scoreBandForScore(score: number): ScoreBand {
   const s = clampScore10(score);
   if (s >= 7.5) return SCORE_BANDS[2]!;
-  if (s >= 6) return SCORE_BANDS[1]!;
+  if (s >= 5) return SCORE_BANDS[1]!;
   return SCORE_BANDS[0]!;
 }
 

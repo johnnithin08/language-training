@@ -25,6 +25,7 @@ import {
   ListRenderItem,
   Platform,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   View,
@@ -46,12 +47,11 @@ export default function HomeScreen() {
   const [name, setName] = useState("");
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [micAllowed, setMicAllowed] = useState<boolean | null>(
     Platform.OS === "android" ? null : true,
   );
-
-  console.log("sess", sessions);
 
   const mapItemToRow = useCallback((item: SessionListItem): SessionRow => {
     const overall = item.analysis?.scores.overall ?? 0;
@@ -65,33 +65,40 @@ export default function HomeScreen() {
     };
   }, []);
 
+  const loadSessions = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!opts?.silent) setSessionsLoading(true);
+      setSessionsError(null);
+      try {
+        const items = await listRecentSessions(50);
+        setSessions(items.slice(0, 5).map(mapItemToRow));
+      } catch (e) {
+        console.error("listRecentSessions", e);
+        setSessionsError(
+          e instanceof Error ? e.message : "Could not load sessions.",
+        );
+        setSessions([]);
+      } finally {
+        setSessionsLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [mapItemToRow],
+  );
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    void loadSessions({ silent: true });
+  }, [loadSessions]);
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      const load = async () => {
-        setSessionsLoading(true);
-        setSessionsError(null);
-        try {
-          const items = await listRecentSessions(50);
-          if (!active) return;
-          setSessions(items.slice(0, 5).map(mapItemToRow));
-        } catch (e) {
-          console.error("listRecentSessions", e);
-          if (active) {
-            setSessionsError(
-              e instanceof Error ? e.message : "Could not load sessions.",
-            );
-            setSessions([]);
-          }
-        } finally {
-          if (active) setSessionsLoading(false);
-        }
-      };
-      void load();
+      void loadSessions();
       return () => {
         active = false;
       };
-    }, [mapItemToRow]),
+    }, [loadSessions]),
   );
 
   useFocusEffect(
@@ -238,6 +245,14 @@ export default function HomeScreen() {
         ItemSeparatorComponent={SessionSeparator}
         contentContainerStyle={styles.sessionsListContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={app.buttonPrimary}
+            colors={[app.buttonPrimary]}
+          />
+        }
       />
     </View>
   );
