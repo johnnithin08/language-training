@@ -239,14 +239,15 @@ function extractJsonObject(text: string): unknown {
 
 function parseAwsJson(value: unknown): unknown {
 	if (value == null) return null;
-	if (typeof value === "string") {
+	let v = value;
+	while (typeof v === "string") {
 		try {
-			return JSON.parse(value);
+			v = JSON.parse(v);
 		} catch {
 			return null;
 		}
 	}
-	return value;
+	return v;
 }
 
 function asSessionAnalysis(value: unknown): SessionAnalysis | null {

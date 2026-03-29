@@ -5,9 +5,10 @@ import { useVoiceSession } from "@/hooks/useVoiceSession";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
+	Modal,
 	Pressable,
 	StyleSheet,
 	Text,
@@ -27,7 +28,7 @@ export default function VoicePracticeScreen() {
 	const { step, transcripts, error, sessionId, connect, disconnect } =
 		useVoiceSession();
 	const started = useRef(false);
-	const navigatedRef = useRef(false);
+	const [showEndModal, setShowEndModal] = useState(false);
 
 	useEffect(() => {
 		if (started.current) return;
@@ -55,15 +56,6 @@ export default function VoicePracticeScreen() {
 			disconnect();
 		};
 	}, [disconnect]);
-
-	useEffect(() => {
-		if (!sessionId || navigatedRef.current) return;
-		navigatedRef.current = true;
-		router.replace({
-			pathname: "/(app)/session-analysis",
-			params: { sessionId },
-		});
-	}, [sessionId, router]);
 
 	const statusTitle = useMemo(() => {
 		if (step === "analyzing") return "Analyzing...";
@@ -95,6 +87,7 @@ export default function VoicePracticeScreen() {
 
 	const handleEndSession = useCallback(() => {
 		disconnect();
+		setShowEndModal(true);
 	}, [disconnect]);
 
 	const iconName = useMemo(() => {
@@ -115,33 +108,23 @@ export default function VoicePracticeScreen() {
 				},
 			]}
 		>
-			{step !== "analyzing" && (
-				<Pressable
-					style={styles.closeButton}
-					onPress={() => {
-						disconnect();
-						router.back();
-					}}
-					hitSlop={10}
-				>
-					<Ionicons name="close" size={24} color={white} />
-				</Pressable>
-			)}
+			<Pressable
+				style={styles.closeButton}
+				onPress={() => {
+					disconnect();
+					router.back();
+				}}
+				hitSlop={10}
+			>
+				<Ionicons name="close" size={24} color={white} />
+			</Pressable>
 
 			<View style={styles.content}>
 				<LinearGradient
 					colors={[...app.iconGradient]}
 					style={styles.micGradient}
 				>
-					{step === "analyzing" ? (
-						<ActivityIndicator size="large" color={white} />
-					) : (
-						<Ionicons
-							name={iconName}
-							size={54}
-							color={white}
-						/>
-					)}
+					<Ionicons name={iconName} size={54} color={white} />
 				</LinearGradient>
 
 				<Text style={styles.title}>{statusTitle}</Text>
@@ -151,15 +134,13 @@ export default function VoicePracticeScreen() {
 					{getCategoryDisplayLabel(categoryId)}
 				</Text>
 
-				{step !== "analyzing" && (
-					<View style={styles.waveWrap}>
-						<View style={[styles.waveBar, { height: 18 }]} />
-						<View style={[styles.waveBar, { height: 26 }]} />
-						<View style={[styles.waveBar, { height: 14 }]} />
-						<View style={[styles.waveBar, { height: 34 }]} />
-						<View style={[styles.waveBar, { height: 22 }]} />
-					</View>
-				)}
+				<View style={styles.waveWrap}>
+					<View style={[styles.waveBar, { height: 18 }]} />
+					<View style={[styles.waveBar, { height: 26 }]} />
+					<View style={[styles.waveBar, { height: 14 }]} />
+					<View style={[styles.waveBar, { height: 34 }]} />
+					<View style={[styles.waveBar, { height: 22 }]} />
+				</View>
 			</View>
 
 			{isSessionActive && (
@@ -174,11 +155,48 @@ export default function VoicePracticeScreen() {
 				</Pressable>
 			)}
 
-			{step === "analyzing" && (
-				<View style={styles.endButton}>
-					<ActivityIndicator color={white} />
+			<Modal
+				visible={showEndModal}
+				transparent
+				animationType="fade"
+				statusBarTranslucent
+			>
+				<View style={styles.modalOverlay}>
+					<View style={styles.modalCard}>
+						<View style={styles.modalIconWrap}>
+							<Ionicons
+								name="analytics-outline"
+								size={36}
+								color={app.buttonPrimary}
+							/>
+						</View>
+						<Text style={styles.modalTitle}>Session Ended</Text>
+						<Text style={styles.modalBody}>
+							Your session is being analysed. The results will
+							appear in your recent sessions shortly.
+						</Text>
+						<ActivityIndicator
+							size="small"
+							color={app.buttonPrimary}
+							style={{ marginBottom: 20 }}
+						/>
+						<Pressable
+							style={({ pressed }) => [
+								styles.modalButton,
+								pressed && { opacity: 0.85 },
+							]}
+							onPress={() => {
+								setShowEndModal(false);
+								router.replace("/(app)");
+							}}
+						>
+							<Text style={styles.modalButtonText}>
+								Go to Home
+							</Text>
+						</Pressable>
+					</View>
 				</View>
-			)}
+			</Modal>
 		</View>
 	);
 }
@@ -257,6 +275,61 @@ const styles = StyleSheet.create({
 	endButtonText: {
 		color: white,
 		fontSize: 18,
+		fontWeight: "700",
+	},
+	modalOverlay: {
+		flex: 1,
+		backgroundColor: "rgba(0,0,0,0.7)",
+		alignItems: "center",
+		justifyContent: "center",
+		paddingHorizontal: 28,
+	},
+	modalCard: {
+		backgroundColor: colors.slate[900],
+		borderRadius: 24,
+		borderWidth: 1,
+		borderColor: "#2a3561",
+		paddingHorizontal: 28,
+		paddingTop: 32,
+		paddingBottom: 24,
+		alignItems: "center",
+		width: "100%",
+		maxWidth: 360,
+	},
+	modalIconWrap: {
+		width: 72,
+		height: 72,
+		borderRadius: 36,
+		backgroundColor: "rgba(99,102,241,0.15)",
+		alignItems: "center",
+		justifyContent: "center",
+		marginBottom: 18,
+	},
+	modalTitle: {
+		color: white,
+		fontSize: 22,
+		fontWeight: "700",
+		marginBottom: 10,
+		textAlign: "center",
+	},
+	modalBody: {
+		color: app.textMuted,
+		fontSize: 15,
+		lineHeight: 22,
+		textAlign: "center",
+		marginBottom: 20,
+	},
+	modalButton: {
+		backgroundColor: app.buttonPrimary,
+		borderRadius: 16,
+		paddingVertical: 14,
+		paddingHorizontal: 32,
+		width: "100%",
+		alignItems: "center",
+	},
+	modalButtonText: {
+		color: white,
+		fontSize: 17,
 		fontWeight: "700",
 	},
 });

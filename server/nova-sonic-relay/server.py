@@ -16,6 +16,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import aiohttp
 import boto3
@@ -885,12 +886,14 @@ class VoiceSession:
             "dynamodb", region_name=BEDROCK_TEXT_REGION
         ).Table(SESSION_TABLE_NAME)
 
+        analysis_safe = json.loads(json.dumps(analysis), parse_float=Decimal)
+
         item = {
             "id": session_id,
             "__typename": "Session",
             "categoryId": self.category_id,
             "targetLanguage": self.target_language,
-            "analysisJson": json.dumps(analysis),
+            "analysisJson": analysis_safe,
             "owner": self.user_sub,
             "createdAt": now,
             "updatedAt": now,
