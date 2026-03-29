@@ -13,7 +13,10 @@
       "bundleIdentifier": "com.johnnithin08.language-training",
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "Lingua AI uses speech recognition to convert your voice into text for conversation practice.",
-        "NSMicrophoneUsageDescription": "Lingua AI uses the microphone so you can speak and practice conversations."
+        "NSMicrophoneUsageDescription": "Lingua AI uses the microphone so you can speak and practice conversations.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {
@@ -43,6 +46,9 @@
         {
           "ios": {
             "deploymentTarget": "15.1"
+          },
+          "android": {
+            "usesCleartextTraffic": true
           }
         }
       ],
