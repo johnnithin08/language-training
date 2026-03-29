@@ -9,7 +9,7 @@ import {
 	type MediaStream as RNMediaStream,
 } from "react-native-webrtc";
 
-const WS_URL = "ws://13.43.104.139:8080";
+const WS_URL = process.env.EXPO_PUBLIC_RELAY_WS_URL ?? "ws://13.43.104.139:8080";
 
 export type VoiceSessionTranscript = { role: string; text: string };
 
