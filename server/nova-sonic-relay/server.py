@@ -779,11 +779,14 @@ class VoiceSession:
 
     async def _analyze_text_model(self, pronunciation: dict) -> dict:
         """Use Bedrock Converse with pronunciation data from Transcribe."""
-        transcript_lines = "\n".join(
-            f"{t.get('role', 'USER')}: {t.get('text', '')}"
+        assistant_lines = "\n".join(
+            f"ASSISTANT: {t.get('text', '')}"
             for t in self._ai_transcripts
-            if t.get("text", "").strip()
+            if t.get("role", "").upper() == "ASSISTANT"
+            and t.get("text", "").strip()
         )
+
+        user_speech = pronunciation.get("transcript", "").strip()
 
         level_ctx = ""
         if self.language_level.strip():
@@ -807,16 +810,21 @@ class VoiceSession:
 
         system_text = (
             "You are an expert English language assessor. You will receive:\n"
-            "1. A transcript of a spoken practice conversation between a "
-            "language learner (USER) and an AI practice partner (ASSISTANT).\n"
-            "2. Pronunciation data from audio analysis with per-word "
+            "1. The learner's speech transcribed directly from audio by a "
+            "speech-to-text engine — this is the authoritative source of "
+            "what the learner said.\n"
+            "2. The AI practice partner's responses (for conversation context "
+            "only — do NOT score these).\n"
+            "3. Pronunciation data from audio analysis with per-word "
             "confidence scores (0-1 scale, lower = harder to recognise = "
             "likely pronunciation issue).\n\n"
-            "Analyze ONLY the learner's turns. Use the pronunciation data "
+            "Analyze ONLY the learner's speech. Use the pronunciation data "
             "to score pronunciation accurately — low-confidence words indicate "
             "the learner's speech was unclear or mispronounced.\n\n"
-            "The learner's lines are transcribed from speech, not typed. "
+            "The learner's text is transcribed from speech, not typed. "
             "Do NOT treat missing or incorrect punctuation as errors.\n\n"
+            "For corrected_examples, quote the learner's ACTUAL words from "
+            "the audio transcript (not the AI partner's words).\n\n"
             "### SCORING CRITERIA (0–10)\n"
             "grammar: Correct use of tense, sentence structure, agreement\n"
             "fluency: Natural flow and ease of expression\n"
@@ -845,8 +853,10 @@ class VoiceSession:
         )
 
         user_text = (
-            f"### CONVERSATION TRANSCRIPT\n"
-            f"{transcript_lines or '(no learner speech detected)'}\n"
+            f"### LEARNER'S SPEECH (transcribed from audio)\n"
+            f"{user_speech or '(no learner speech detected)'}\n\n"
+            f"### AI PARTNER'S RESPONSES (context only)\n"
+            f"{assistant_lines or '(none)'}\n"
             f"{level_ctx}\n"
             f"{pron_section}\n"
             f"Provide the JSON assessment."
