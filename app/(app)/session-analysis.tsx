@@ -20,12 +20,12 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-// import Svg, {
-// 	Circle,
-// 	Defs,
-// 	LinearGradient as SvgLinearGradient,
-// 	Stop,
-// } from "react-native-svg";
+import Svg, {
+  Circle,
+  Defs,
+  LinearGradient as SvgLinearGradient,
+  Stop,
+} from "react-native-svg";
 
 const CEFR_ORDER = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 
@@ -44,44 +44,44 @@ const CX = RING_SIZE / 2;
 const CY = RING_SIZE / 2;
 const CIRC = 2 * Math.PI * R;
 
-// function ScoreRing({ progress }: { progress: number }) {
-// 	const p = Math.min(1, Math.max(0, progress / 10));
-// 	const offset = CIRC * (1 - p);
+function ScoreRing({ progress }: { progress: number }) {
+  const p = Math.min(1, Math.max(0, progress / 10));
+  const offset = CIRC * (1 - p);
 
-// 	return (
-// 		<View style={styles.ringWrap}>
-// 			<Svg width={RING_SIZE} height={RING_SIZE}>
-// 				<Defs>
-// 					<SvgLinearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
-// 						<Stop offset="0" stopColor="#5eead4" />
-// 						<Stop offset="0.5" stopColor="#a78bfa" />
-// 						<Stop offset="1" stopColor="#c084fc" />
-// 					</SvgLinearGradient>
-// 				</Defs>
-// 				<Circle
-// 					cx={CX}
-// 					cy={CY}
-// 					r={R}
-// 					stroke="#1e293b"
-// 					strokeWidth={RING_STROKE}
-// 					fill="none"
-// 				/>
-// 				<Circle
-// 					cx={CX}
-// 					cy={CY}
-// 					r={R}
-// 					stroke="url(#ringGrad)"
-// 					strokeWidth={RING_STROKE}
-// 					fill="none"
-// 					strokeDasharray={CIRC}
-// 					strokeDashoffset={offset}
-// 					strokeLinecap="round"
-// 					transform={`rotate(-90 ${CX} ${CY})`}
-// 				/>
-// 			</Svg>
-// 		</View>
-// 	);
-// }
+  return (
+    <View style={styles.ringWrap}>
+      <Svg width={RING_SIZE} height={RING_SIZE}>
+        <Defs>
+          <SvgLinearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#5eead4" />
+            <Stop offset="0.5" stopColor="#a78bfa" />
+            <Stop offset="1" stopColor="#c084fc" />
+          </SvgLinearGradient>
+        </Defs>
+        <Circle
+          cx={CX}
+          cy={CY}
+          r={R}
+          stroke="#1e293b"
+          strokeWidth={RING_STROKE}
+          fill="none"
+        />
+        <Circle
+          cx={CX}
+          cy={CY}
+          r={R}
+          stroke="url(#ringGrad)"
+          strokeWidth={RING_STROKE}
+          fill="none"
+          strokeDasharray={CIRC}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${CX} ${CY})`}
+        />
+      </Svg>
+    </View>
+  );
+}
 
 function ScoreBar({
   label,
@@ -273,7 +273,7 @@ export default function SessionAnalysisScreen() {
       >
         <View style={styles.hero}>
           <View style={styles.ringStack}>
-            {/* <ScoreRing progress={scores.overall} /> */}
+            <ScoreRing progress={scores.overall} />
             <View style={styles.ringCenter}>
               <Text style={styles.scoreHuge}>{scores.overall.toFixed(1)}</Text>
               <Text style={styles.scoreSub}>out of 10</Text>
